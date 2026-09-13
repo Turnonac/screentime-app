@@ -1,0 +1,621 @@
+####################################################################################
+# Gate — XcodeGen project specification.
+#
+# This file is the SINGLE SOURCE OF TRUTH for the Xcode project. Gate.xcodeproj is
+# generated (`make project`) and git-ignored. Never hand-edit the pbxproj; XcodeGen
+# will overwrite it and the `dstSubfolderSpec` for the ExtensionKit embed phase is
+# trivially easy to corrupt by hand (docs/05-architecture.md, "Project generation").
+#
+# XcodeGen also GENERATES the Info.plist and .entitlements files under Config/ from
+# the `info:` / `entitlements:` blocks below. Those files are committed so they are
+# reviewable and diffable, but this file is what produces them — edit here, run
+# `make project`, commit both.
+#
+# Targets: 7. GateWidgets is v2 and is deliberately absent — a dead target that
+# nothing builds into is worse than no target (docs/04-product-spec.md, V2-7).
+#
+# Build plan: docs/06-build-plan.md steps 1.2 and 1.6.
+####################################################################################
+
+name: Gate
+
+options:
+  # Only used as a fallback for targets that do not set PRODUCT_BUNDLE_IDENTIFIER
+  # explicitly. Every target below sets it explicitly from $(BUNDLE_ID_PREFIX),
+  # because XcodeGen's derived form would be "<prefix>.<TargetName>" and the
+  # locked IDs use lowercase-hyphenated suffixes instead.
+  bundleIdPrefix: com.turnonac.gate
+
+  # IPHONEOS_DEPLOYMENT_TARGET is deliberately NOT set here. Config/Build.xcconfig
+  # owns it (17.0). Setting it in `options` would bake a duplicate into the pbxproj
+  # at target level, where it would silently shadow the xcconfig.
+
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+  defaultConfig: Debug
+  transitivelyLinkDependencies: false
+  findCarthageFrameworks: false
+
+  # `extensionkit-extension` support and the matching "Embed ExtensionKit
+  # Extensions" phase require a reasonably current XcodeGen. Fail loudly rather
+  # than silently generating GateReport as a plain app-extension.
+  minimumXcodeGenVersion: "2.42.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+# Project-level xcconfig. Applies to every target in both configurations; target
+# `settings:` blocks below override it. See Config/Build.xcconfig for TEAM_ID,
+# BUNDLE_ID_PREFIX, APP_GROUP, the iOS floor, Swift 6 + strict concurrency, and
+# the shared version numbers.
+configFiles:
+  Debug: Config/Build.xcconfig
+  Release: Config/Build.xcconfig
+
+# Non-source files surfaced in the Xcode navigator so they are editable in-IDE.
+fileGroups:
+  - Config
+  - Docs
+  - docs
+  - Makefile
+  - project.yml
+
+settings:
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
+      GCC_OPTIMIZATION_LEVEL: "0"
+      ONLY_ACTIVE_ARCH: YES
+      ENABLE_TESTABILITY: YES
+      STRIP_INSTALLED_PRODUCT: NO
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      VALIDATE_PRODUCT: YES
+      ENABLE_NS_ASSERTIONS: NO
+
+####################################################################################
+# Target template — shared by the three classic (NSExtension) Screen Time
+# extensions. GateReport does NOT use it: it is an ExtensionKit extension and is
+# spelled out in full below so the product type is impossible to miss in review.
+#
+# docs/06-build-plan.md step 1.2.
+####################################################################################
+
+targetTemplates:
+
+  ScreenTimeExtension:
+    type: app-extension
+    platform: iOS
+
+    entitlements:
+      path: Config/Gate-Extension.entitlements
+      properties:
+        # Exactly two keys. There are NO com.apple.developer.deviceactivity*
+        # entitlements — those are phantom keys developers hand-add chasing a
+        # "missing entitlement" error, and their presence breaks provisioning
+        # (docs/02-api-reference.md §2; docs/06-build-plan.md step 1.4).
+        #
+        # keychain-access-groups is on the APP ONLY. The Keychain-backed lock
+        # deadline (V1-3) is written and read by the app; no extension needs it,
+        # and every entitlement an .appex carries is one more thing that has to
+        # match its provisioning profile.
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups:
+          # Literal on purpose: this string is compared character-for-character
+          # against the App Group registered in the developer portal. Keep it in
+          # sync with APP_GROUP in Config/Build.xcconfig (`make verify` checks).
+          - group.com.turnonac.gate
+
+    settings:
+      base:
+        # Not installed standalone; the app embeds it.
+        SKIP_INSTALL: YES
+
+        # Bans UIApplication.shared and friends at COMPILE time. Without it the
+        # symbol compiles and traps at runtime inside the extension, and any
+        # framework it links must also be extension-safe or the linker emits
+        # "linking against a dylib which is not safe for use in application
+        # extensions" (docs/05-architecture.md, module layer split).
+        APPLICATION_EXTENSION_API_ONLY: YES
+
+        # We supply hand-reviewed Info.plists; never let Xcode synthesize one.
+        GENERATE_INFOPLIST_FILE: NO
+
+        # <App>.app/PlugIns/<Ext>.appex/<Ext>  →  ../../ is <App>.app/
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+          - "@executable_path/../../Frameworks"
+
+####################################################################################
+# Targets
+#
+#  Target                   Bundle ID                                Type
+#  ────────────────────────────────────────────────────────────────────────────────
+#  Gate                     com.turnonac.gate                        application
+#  GateKernel               com.turnonac.gate.kernel                 framework
+#  GateKernelUI             com.turnonac.gate.kernelui               framework
+#  GateActivityMonitor      com.turnonac.gate.activity-monitor       app-extension
+#  GateShieldConfiguration  com.turnonac.gate.shield-configuration   app-extension
+#  GateShieldAction         com.turnonac.gate.shield-action          app-extension
+#  GateReport               com.turnonac.gate.report                 extensionkit-extension
+#
+#  (GateWidgets / com.turnonac.gate.widgets is v2 and intentionally omitted.)
+#
+#  Casing is locked — see Docs/ENTITLEMENT-REQUEST.md and
+#  docs/03-hard-constraints.md #5. All seven IDs derive from
+#  $(BUNDLE_ID_PREFIX) so the prefix exists in exactly one place.
+#
+#  `optional: true` on every `sources` path: Phase 1 generates a project before
+#  Phases 2–5 have created App/, Kernel/, KernelUI/ or Extensions/. Without it
+#  `xcodegen generate` fails on a fresh clone with "missing source directory".
+#  Files are picked up automatically as each phase lands.
+####################################################################################
+
+targets:
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Gate — the container app. The only writer of state.plist / shield.plist and
+  # the only process that may present UI, request authorization, or show the
+  # FamilyActivityPicker (docs/05-architecture.md, data-flow diagram).
+  # ══════════════════════════════════════════════════════════════════════════════
+  Gate:
+    type: application
+    platform: iOS
+
+    sources:
+      - path: App
+        optional: true
+
+      # Phase 7.1 adds the privacy manifests — one per bundle, five total.
+      # They are NOT wired up yet, on purpose: declaring a required-reason API
+      # category you do not actually hit is itself rejectable (ITMS-91054/91055),
+      # and the app does not touch App Group UserDefaults until Phase 3.2.
+      #
+      # When you add them, the file must be named PrivacyInfo.xcprivacy INSIDE
+      # the bundle — a source file called "App-PrivacyInfo.xcprivacy" copies in
+      # under that name and is silently ignored. Give each target its own
+      # directory and let the basename be PrivacyInfo.xcprivacy:
+      #
+      #   - path: Config/Privacy/App/PrivacyInfo.xcprivacy
+      #     buildPhase: resources
+
+    info:
+      path: Config/Gate-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleDisplayName: Gate
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        # Deep-link target for the sub-iOS-26.5 intervention fallback: the shield
+        # action extension cannot open the app on those versions, so it posts a
+        # UNNotificationRequest carrying a gate:// URL and returns .close
+        # (docs/04-product-spec.md V1-7).
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes:
+              - gate
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # v1 uses no encryption beyond what iOS itself provides. Declaring it
+        # here removes the per-upload export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
+        LSRequiresIPhoneOS: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Empty dict = system-generated launch screen. Required, or the app is
+        # letterboxed on modern displays.
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # NOTE: no UIBackgroundModes. v1 reconciles on foreground and backstops
+        # with UNCalendarNotificationTrigger (docs/04-product-spec.md V1-10).
+        # Declaring a background mode the app does not use invites a 2.5.4
+        # rejection; add `processing` + BGTaskSchedulerPermittedIdentifiers only
+        # when BGAppRefreshTask actually ships.
+
+    entitlements:
+      path: Config/Gate-App.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups:
+          - group.com.turnonac.gate
+        # App only. Holds the lock deadline + lock-config hash under
+        # kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, which is what makes
+        # delete-and-reinstall fail to reset the delay clock — Keychain items
+        # survive app deletion, the App Group container does not
+        # (docs/04-product-spec.md V1-3; Kernel/Store/LockClock.swift, Phase 3.4).
+        # $(AppIdentifierPrefix) is Apple's documented team-prefix variable and is
+        # expanded by Xcode at signing time.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.turnonac.gate
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX)
+        PRODUCT_NAME: Gate
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+
+    dependencies:
+      # Frameworks are embedded ONCE, here, in Gate.app/Frameworks. Every
+      # extension links them with embed: false and resolves them through
+      # @executable_path/../../Frameworks at load time.
+      - target: GateKernel
+        embed: true
+        codeSign: true
+      - target: GateKernelUI
+        embed: true
+        codeSign: true
+
+      # The four extensions. XcodeGen routes the three app-extensions into
+      # "Embed Foundation Extensions" (PlugIns/, dstSubfolderSpec 13) and
+      # GateReport into "Embed ExtensionKit Extensions"
+      # ($(EXTENSIONS_FOLDER_PATH), dstSubfolderSpec 16). `make verify` asserts
+      # this after generation — getting GateReport wrong costs a full App Store
+      # review cycle (docs/06-build-plan.md step 1.6).
+      - target: GateActivityMonitor
+        embed: true
+        codeSign: true
+      - target: GateShieldConfiguration
+        embed: true
+        codeSign: true
+      - target: GateShieldAction
+        embed: true
+        codeSign: true
+      - target: GateReport
+        embed: true
+        codeSign: true
+        # If `make verify` reports dstSubfolderSpec 13 for GateReport, your
+        # XcodeGen predates ExtensionKit support. Upgrade it; only if you cannot,
+        # force the destination explicitly:
+        #   copy:
+        #     destination: productsDirectory
+        #     subpath: "$(EXTENSIONS_FOLDER_PATH)"
+
+    # FamilyControls / ManagedSettings / ManagedSettingsUI / DeviceActivity are
+    # not listed as explicit sdk dependencies anywhere in this file: Swift
+    # autolinking resolves them from `import`. Adding them by hand only creates
+    # a second place for a framework name to be wrong.
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateKernel — pure Swift, Foundation only. No UIKit, no SwiftUI, no SwiftData,
+  # no networking. This is the framework the 6 MB monitor extension links, so its
+  # dependency list is a hard constraint, not a style preference
+  # (docs/03-hard-constraints.md #31; docs/05-architecture.md, module layer split).
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateKernel:
+    type: framework
+    platform: iOS
+
+    sources:
+      - path: Kernel
+        optional: true
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).kernel
+        PRODUCT_NAME: GateKernel
+        APPLICATION_EXTENSION_API_ONLY: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        # Frameworks get a synthesized Info.plist; only the app and the four
+        # .appex bundles carry hand-reviewed ones.
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: GateKernel
+        DYLIB_COMPATIBILITY_VERSION: "1"
+        DYLIB_CURRENT_VERSION: "1"
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        INSTALL_PATH: $(LOCAL_LIBRARY_DIR)/Frameworks
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+          - "@loader_path/Frameworks"
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateKernelUI — SwiftUI views, colors, formatters.
+  #
+  # Linked by Gate, GateShieldConfiguration (colors/strings only) and GateReport.
+  # NEVER by GateActivityMonitor. Also APPLICATION_EXTENSION_API_ONLY, because two
+  # of its three consumers are extensions.
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateKernelUI:
+    type: framework
+    platform: iOS
+
+    sources:
+      - path: KernelUI
+        optional: true
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).kernelui
+        PRODUCT_NAME: GateKernelUI
+        APPLICATION_EXTENSION_API_ONLY: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: GateKernelUI
+        DYLIB_COMPATIBILITY_VERSION: "1"
+        DYLIB_CURRENT_VERSION: "1"
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        INSTALL_PATH: $(LOCAL_LIBRARY_DIR)/Frameworks
+        ENABLE_PREVIEWS: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+          - "@loader_path/Frameworks"
+
+    dependencies:
+      # Link only. Gate.app embeds both frameworks exactly once.
+      - target: GateKernel
+        embed: false
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateActivityMonitor — DeviceActivityMonitor subclass. 6 MB ceiling.
+  #
+  # Links GateKernel and NOTHING ELSE. No GateKernelUI, no SwiftUI, no analytics,
+  # no networking. A ModelContainer schema build alone can approach the whole
+  # budget before your code runs, and a jetsam kill inside eventDidReachThreshold
+  # means the block silently never applies (docs/05-architecture.md).
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateActivityMonitor:
+    templates:
+      - ScreenTimeExtension
+
+    sources:
+      - path: Extensions/ActivityMonitor
+        optional: true
+
+    info:
+      path: Config/ActivityMonitor-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleDisplayName: Gate Activity Monitor
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          # ⚠️ TRAP — the "-extension" suffix is mandatory.
+          # "com.apple.deviceactivity.monitor" builds, installs, and produces an
+          # extension that is NEVER LAUNCHED. startMonitoring still succeeds and
+          # DeviceActivityCenter().activities still lists the activity, so there
+          # is no runtime signal at all (thread 820956;
+          # docs/02-api-reference.md §3, Trap 2).
+          NSExtensionPointIdentifier: com.apple.deviceactivity.monitor-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).GateActivityMonitor
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).activity-monitor
+
+    dependencies:
+      - target: GateKernel
+        embed: false
+      # DO NOT add GateKernelUI here. See the module layer split.
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateShieldConfiguration — ShieldConfigurationDataSource. Vends UI, so it lives
+  # in ManagedSettingsUI. Network-blocked and latency-bounded: read shield.plist
+  # synchronously and return in microseconds, or the system substitutes its own
+  # default shield (docs/03-hard-constraints.md #33).
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateShieldConfiguration:
+    templates:
+      - ScreenTimeExtension
+
+    sources:
+      - path: Extensions/ShieldConfiguration
+        optional: true
+
+    info:
+      path: Config/ShieldConfiguration-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleDisplayName: Gate Shield
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          # ⚠️ TRAP — configuration is "ManagedSettingsUI", action is
+          # "ManagedSettings". The asymmetry is deliberate: configuration vends
+          # UI, action vends behavior. Swapping them builds and runs locally and
+          # is then rejected by App Store Connect with "Invalid Info.plist value"
+          # (Apple DTS thread 814945; docs/02-api-reference.md §3, Trap 1).
+          #
+          # This one HAS the UI:            ManagedSettingsUI
+          NSExtensionPointIdentifier: com.apple.ManagedSettingsUI.shield-configuration-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).GateShieldConfiguration
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).shield-configuration
+
+    dependencies:
+      - target: GateKernel
+        embed: false
+      - target: GateKernelUI
+        embed: false
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateShieldAction — ShieldActionDelegate. The only extension that WRITES
+  # (append-only, into inbox/). Never mutates state.plist; the app compacts the
+  # inbox on the next foreground reconcile (docs/05-architecture.md,
+  # single-writer discipline).
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateShieldAction:
+    templates:
+      - ScreenTimeExtension
+
+    sources:
+      - path: Extensions/ShieldAction
+        optional: true
+
+    info:
+      path: Config/ShieldAction-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleDisplayName: Gate Shield Action
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          # ⚠️ TRAP — NO "UI" in this identifier. See the note on
+          # GateShieldConfiguration above. "ManagedSettingsUI.shield-action-service"
+          # is the exact string App Store Connect rejects.
+          #
+          # This one has NO UI:             ManagedSettings
+          NSExtensionPointIdentifier: com.apple.ManagedSettings.shield-action-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).GateShieldAction
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).shield-action
+
+    dependencies:
+      - target: GateKernel
+        embed: false
+      # No GateKernelUI: this extension draws nothing. It records an event and
+      # returns a ShieldActionResponse.
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # GateReport — DeviceActivityReportExtension.
+  #
+  # ⚠️⚠️  type: extensionkit-extension  —  NOT app-extension.  ⚠️⚠️
+  #
+  # This target deliberately does NOT use the ScreenTimeExtension template, so
+  # that nothing about its product type can be inherited or accidentally
+  # overridden. The catch-22 it resolves (docs/02-api-reference.md §3, Trap 3):
+  #
+  #   • WITH NSExtensionPrincipalClass  → device install fails,
+  #     "Error 3002 AppexBundleContainsClassOrStoryboard"
+  #   • WITHOUT it, as a plain app-extension → App Store Connect rejects,
+  #     "No values for NSExtensionMainStoryboard or NSExtensionPrincipalClass"
+  #
+  # The resolution is to make it a true ExtensionKit extension: EXAppExtension-
+  # Attributes instead of NSExtension, no principal class, productType
+  # com.apple.product-type.extensionkit-extension, and an embed phase with
+  # dstSubfolderSpec = 16 (Extensions/) rather than 13 (PlugIns/).
+  # `make verify` asserts all of that on the generated pbxproj.
+  #
+  # This extension is a SEALED SANDBOX. Nothing it computes can reach the app by
+  # any channel — App Group file writes, UserDefaults, HTTP, notifications,
+  # pasteboard and iCloud KVS are all confirmed blocked (Apple DTS: "Yes.").
+  # Write nothing here; it is silently discarded
+  # (docs/03-hard-constraints.md #30).
+  # ══════════════════════════════════════════════════════════════════════════════
+  GateReport:
+    type: extensionkit-extension
+    platform: iOS
+
+    sources:
+      - path: Extensions/Report
+        optional: true
+
+    info:
+      path: Config/Report-Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleDisplayName: Gate Report
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # ExtensionKit form. There is intentionally NO `NSExtension` dict and NO
+        # NSExtensionPrincipalClass anywhere in this plist — the @main
+        # DeviceActivityReportExtension struct is the entry point.
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.deviceactivityui.report-extension
+
+    entitlements:
+      path: Config/Gate-Extension.entitlements
+      properties:
+        com.apple.developer.family-controls: true
+        com.apple.security.application-groups:
+          - group.com.turnonac.gate
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).report
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: YES
+        # <App>.app/Extensions/<Ext>.appex/<Ext>  →  ../../ is <App>.app/,
+        # the same depth as PlugIns/, so the rpath is unchanged.
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+          - "@executable_path/../../Frameworks"
+
+    dependencies:
+      - target: GateKernel
+        embed: false
+      - target: GateKernelUI
+        embed: false
+
+####################################################################################
+# Schemes
+#
+# One scheme. `xcodebuild -scheme Gate` builds the app and, transitively, both
+# frameworks and all four extensions.
+#
+# There is deliberately no Xcode unit-test target. The Kernel is tested as a
+# platform-agnostic SwiftPM package under Tests/ so `swift test` runs without
+# Xcode and without a device (`make test`, docs/06-build-plan.md step 3.11).
+# Nothing on this stack can be tested in the Simulator anyway
+# (docs/03-hard-constraints.md #11).
+####################################################################################
+
+schemes:
+  Gate:
+    build:
+      targets:
+        Gate: all
+      parallelizeBuild: true
+      buildImplicitDependencies: true
+    run:
+      config: Debug
+      askForAppToLaunch: false
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+      revealArchiveInOrganizer: true

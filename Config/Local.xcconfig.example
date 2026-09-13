@@ -1,0 +1,40 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate — per-developer signing overrides.  TEMPLATE — copy, do not edit in place.
+//
+//     cp Config/Local.xcconfig.example Config/Local.xcconfig
+//
+// Config/Local.xcconfig is git-ignored. Config/Build.xcconfig ends with
+//     #include? "Local.xcconfig"
+// so whatever you set here overrides the repo defaults without producing a diff.
+//
+// Nothing in this file is secret, but it is machine-specific: your Team ID,
+// and (if you are not the repo owner) your own bundle-ID prefix, since only
+// one Apple Developer account can own a given App ID.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// Your 10-character Apple Developer Team ID.
+// developer.apple.com/account → Membership details → Team ID.
+// Must be a PAID Apple Developer Program team — Family Controls is unavailable
+// on a free Personal Team (docs/03-hard-constraints.md #1).
+TEAM_ID = XXXXXXXXXX
+
+
+// ── Optional: build under your own bundle-ID prefix ─────────────────────────
+//
+// Uncomment BOTH lines together if you are not signing as the repo owner.
+// They must stay in sync, and the App Group must exist in your account with
+// exactly this spelling.
+//
+// WARNING: changing BUNDLE_ID_PREFIX means the five App IDs in
+// Docs/ENTITLEMENT-REQUEST.md no longer match what you build, and each one
+// needs its own Family Controls distribution request under the new prefix.
+// Casing is load-bearing (docs/03-hard-constraints.md #5).
+//
+// Changing APP_GROUP here is NOT sufficient on its own: the literal also
+// appears in Config/Gate-App.entitlements, Config/Gate-Extension.entitlements
+// and Kernel/Identifiers.swift (`GateID.appGroup`). Change all four, then run
+// `make verify`.
+//
+// BUNDLE_ID_PREFIX = com.yourteam.gate
+// APP_GROUP = group.com.yourteam.gate

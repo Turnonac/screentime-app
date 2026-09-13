@@ -1,0 +1,121 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate — shared build configuration.
+//
+// Applied at the PROJECT level to every target and every configuration
+// (see `configFiles:` in project.yml). Target-level settings in project.yml
+// override anything set here, so only project-wide invariants belong in
+// this file.
+//
+// NOTE: xcconfig comments are `//` only. `#` introduces a directive
+// (`#include`, `#include?`), never a comment.
+//
+// Build plan: docs/06-build-plan.md step 1.1
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ── Identity ────────────────────────────────────────────────────────────────
+//
+// DEVELOPER ACTION REQUIRED — TEAM_ID is intentionally EMPTY in the repo.
+//
+// Do NOT edit this line. Instead:
+//     cp Config/Local.xcconfig.example Config/Local.xcconfig
+//     # then put your 10-character Apple Developer Team ID in that file
+//
+// Config/Local.xcconfig is git-ignored and is `#include?`-ed at the bottom of
+// this file, so it wins over the empty default without dirtying the repo.
+// Find the value at developer.apple.com/account → Membership details.
+//
+// A paid Apple Developer Program membership is MANDATORY — the Family Controls
+// capability is unavailable on a free Personal Team and on the Enterprise
+// program (docs/03-hard-constraints.md #1, #2).
+TEAM_ID =
+
+DEVELOPMENT_TEAM = $(TEAM_ID)
+CODE_SIGN_STYLE = Automatic
+
+
+// ── The two strings that must never drift ───────────────────────────────────
+//
+// BUNDLE_ID_PREFIX casing is LOAD-BEARING. A casing mismatch between the app
+// and any extension produces an Xcode "Prefix Mismatch" error that blocks
+// archiving and forces a fresh entitlement request, which has no SLA
+// (docs/03-hard-constraints.md #5; docs/06-build-plan.md step 0.1).
+// The locked table lives in Docs/ENTITLEMENT-REQUEST.md.
+//
+// Every target's PRODUCT_BUNDLE_IDENTIFIER in project.yml is built from
+// $(BUNDLE_ID_PREFIX) so the casing exists in exactly one place.
+BUNDLE_ID_PREFIX = com.turnonac.gate
+
+// The App Group is the ONLY supported channel between the app and its four
+// extensions (docs/05-architecture.md, process/data-flow diagram).
+//
+// This string is deliberately repeated as a literal in
+// Config/Gate-App.entitlements and Config/Gate-Extension.entitlements, and in
+// Kernel/Identifiers.swift as `GateID.appGroup`. Entitlement files are compared
+// character-for-character against the App Group registered in the Apple
+// Developer portal and baked into the provisioning profile, so they carry the
+// literal rather than a variable. If you change it here, change it in all four
+// places (`make verify` checks the entitlements against this value).
+APP_GROUP = group.com.turnonac.gate
+
+
+// ── Platform floor ──────────────────────────────────────────────────────────
+//
+// 16.0 is the hard floor for FamilyControlsMember.individual and
+// DeviceActivityReport; 17.0 buys @Observable at negligible install-base cost.
+// Everything above 17.0 is `if #available`-gated in source — the app must
+// still build and behave sensibly on iOS 17 (docs/02-api-reference.md §1, §13).
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+
+// iPhone + iPad. NOT macOS, NOT Mac Catalyst, NOT visionOS: Family Controls
+// authorization fails at runtime on all three and Family Controls appears in
+// none of Apple's macOS / visionOS / tvOS supported-capability tables
+// (docs/03-hard-constraints.md #9, #10).
+TARGETED_DEVICE_FAMILY = 1,2
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+SUPPORTS_MACCATALYST = NO
+SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO
+SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO
+
+
+// ── Swift ───────────────────────────────────────────────────────────────────
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY = YES
+SWIFT_EMIT_LOC_STRINGS = YES
+
+
+// ── Versioning ──────────────────────────────────────────────────────────────
+//
+// The app and all four .appex bundles MUST carry identical
+// CFBundleShortVersionString / CFBundleVersion values or App Store Connect
+// rejects the upload. Every Info.plist in Config/ reads these two settings,
+// so a release is a one-line change here.
+MARKETING_VERSION = 1.0
+CURRENT_PROJECT_VERSION = 1
+
+
+// ── Hygiene ─────────────────────────────────────────────────────────────────
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+ENABLE_MODULE_VERIFIER = NO
+DEAD_CODE_STRIPPING = YES
+CLANG_ENABLE_OBJC_WEAK = YES
+GCC_NO_COMMON_BLOCKS = YES
+ALWAYS_SEARCH_USER_PATHS = NO
+CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES
+
+// The DeviceActivityMonitor extension has a 6 MB hard memory ceiling and is
+// jetsam-killed the moment it is exceeded (docs/03-hard-constraints.md #31).
+// Stripping and `-Osize` keep the shipped binaries small; the Debug
+// configuration overrides the optimization level back to -Onone in project.yml.
+SWIFT_OPTIMIZATION_LEVEL = -Osize
+LLVM_LTO = NO
+STRIP_INSTALLED_PRODUCT = YES
+COPY_PHASE_STRIP = NO
+
+
+// ── Per-developer overrides. MUST stay last so it wins. ─────────────────────
+//
+// `#include?` (with the question mark) is the optional form: the build does not
+// fail when the file is absent, which is the state of a fresh clone.
+#include? "Local.xcconfig"

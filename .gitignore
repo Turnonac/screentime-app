@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate — .gitignore
+#
+# The Xcode project is GENERATED. `project.yml` is the source of truth; run
+# `make project` after cloning. Never commit Gate.xcodeproj — see
+# docs/05-architecture.md, "Project generation: XcodeGen".
+# ─────────────────────────────────────────────────────────────────────────────
+
+## Generated Xcode project / workspace — regenerate with `make project`
+*.xcodeproj
+*.xcworkspace
+
+## Local, per-developer signing overrides (TEAM_ID). Template lives at
+## Config/Local.xcconfig.example — copy it, fill it in, never commit it.
+Config/Local.xcconfig
+
+## Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+## Xcode build products and per-user state
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Xcode / Instruments
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+timeline.xctimeline
+playground.xcworkspace
+*.trace
+
+## Provisioning / signing artifacts (never commit these)
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+*.certSigningRequest
+
+## Fastlane / CI scratch
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+## Editors
+.idea/
+.vscode/
+*.swp
+*~
