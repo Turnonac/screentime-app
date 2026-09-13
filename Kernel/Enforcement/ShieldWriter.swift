@@ -706,14 +706,25 @@ public struct ShieldWriteReport: Sendable, Equatable, Hashable {
 
 // MARK: - ShieldCopyFile
 
+// Fenced on `canImport(os)` rather than on `canImport(ManagedSettings)`, and
+// the condition is a proxy: this type needs no Screen Time framework at all,
+// but it does need ``PlistFile``, which lives in
+// `Kernel/Store/GateStateStore.swift`, which imports `os` at file scope — and
+// `os` does not exist on Linux, so the whole file is absent from the
+// platform-agnostic SwiftPM test package (docs/05-architecture.md, module layer
+// split). `Kernel/Engine/GrantEngine.swift` fences its `InboxEvent` bridge on
+// exactly the same condition for exactly the same reason. Everything above this
+// point is Foundation-only and compiles on Linux; everything below needs a
+// device.
+
+#if canImport(os)
+
 /// `shield.plist` — the pre-rendered shield copy the configuration extension
 /// reads (docs/05-architecture.md, data-flow diagram).
 ///
 /// Lives in this file because it is written on the same beat as the stores: a
 /// rule's shield set and the copy shown over it have to change together, or the
 /// user sees the wrong rule's title on a block that is enforcing correctly.
-/// Foundation-only, so it is available in the test package and in the shield
-/// extension alike.
 public enum ShieldCopyFile {
 
     /// Uncoordinated by design.
@@ -745,11 +756,17 @@ public enum ShieldCopyFile {
     }
 }
 
+#endif
+
 // MARK: - ManagedSettings island
 
-// Everything above is pure and compiles on Linux for the SwiftPM test package
-// (docs/05-architecture.md, module layer split). Everything below talks to the
-// Screen Time daemon and exists only on iOS.
+// Everything above the `ShieldCopyFile` fence is pure and compiles on Linux for
+// the SwiftPM test package (docs/05-architecture.md, module layer split) —
+// which is the whole point of splitting ``ShieldPlanner`` out of
+// ``ShieldWriter``: mode inversion and the grant algebra are the two things
+// here that can actually be wrong, and they are the two things testable without
+// a device. Everything below talks to the Screen Time daemon and exists only on
+// iOS.
 //
 // `os` is imported here rather than at the top for the same reason: it does not
 // exist on Linux. `print()` is never an option — it is invisible from an

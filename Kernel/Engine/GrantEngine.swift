@@ -476,9 +476,18 @@ public enum GrantEngine {
             )
         }
 
-        let scope: GrantScope = request.token.map {
-            .tokens(ScopedTokens(token: $0, kind: request.tokenKind))
-        } ?? .tokens(ScopedTokens())
+        // An empty ``ScopedTokens`` is deliberate rather than a fallback to
+        // ``GrantScope/entireRule``: the extension failed to carry the token it
+        // was handed, and widening the unblock on the strength of a failure is
+        // the one direction this product may not fail in.
+        // ``IssueRequest/namesSomethingToLift`` turns it into
+        // ``InterventionRequest/DenialReason/ruleUnresolved`` below.
+        let scope: GrantScope
+        if let token = request.token {
+            scope = .tokens(ScopedTokens(token: token, kind: request.tokenKind))
+        } else {
+            scope = .tokens(ScopedTokens())
+        }
 
         let issuance = issue(
             IssueRequest(
@@ -863,6 +872,13 @@ public extension GrantEngine {
     /// `Extensions/ShieldAction/GateShieldAction.swift` and the app's foreground
     /// compaction cannot spell them differently — a typo here is a token that
     /// never arrives and a grant that lifts nothing.
+    /// Explicitly `public` on every member, and not by accident: a nested type
+    /// declared inside a `public extension` is itself public, but **its own
+    /// members default to `internal`** — the extension's access modifier is the
+    /// default for the extension's direct members only. Without these keywords
+    /// `GateShieldAction` (a separate module linking `GateKernel`) cannot name
+    /// the keys, and the compile failure would land in Phase 4.3 rather than
+    /// here.
     enum InboxKey {
 
         /// Base64 of ``EncodedToken/bytes``.
@@ -872,11 +888,11 @@ public extension GrantEngine {
         /// (docs/02-api-reference.md §10), and without carrying it across, the
         /// app can only offer to unblock the *entire* rule — a broader unblock
         /// than the user asked for, granted because we lost a value we had.
-        static let token = "token"
+        public static let token = "token"
 
         /// ``TokenKind`` raw value: which of the three `handle(action:for:)`
         /// overloads fired.
-        static let tokenKind = "tokenKind"
+        public static let tokenKind = "tokenKind"
     }
 
     /// The payload for a shield tap.

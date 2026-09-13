@@ -628,8 +628,6 @@ public extension GateState {
             case adoptedSchemaVersion(from: Int)
             /// The file is newer than this build. Nothing was touched.
             case refusedDowngrade(fileVersion: Int)
-            case clampedLockDelay(from: TimeInterval, to: TimeInterval)
-            case clampedGrantPolicy
             case clampedGrantLedger(from: Int, to: Int)
             case droppedDuplicateRules(count: Int)
             case droppedExcessRules(count: Int, limit: Int)
@@ -702,23 +700,23 @@ public extension GateState {
         if state.createdAt == .distantPast { state.createdAt = now }
 
         // ── Lock ─────────────────────────────────────────────────────────────
-        let clampedDelay = LockPolicy.clampDelay(state.lock.delay)
-        if clampedDelay != state.lock.delay {
-            repairs.append(.clampedLockDelay(from: state.lock.delay, to: clampedDelay))
-            state.lock.delay = clampedDelay
-        }
+        // Unconditional, and deliberately NOT reported as a repair. Both values
+        // are already canonical by construction — `LockPolicy.init(_:delay:…)`
+        // clamps and `init(from:)` delegates to it, and `LockPolicy.delay` has a
+        // clamping `didSet` covering every later write — so a conditional here
+        // could never fire, and a `Repair` case with no producer reads as
+        // coverage that does not exist. These two lines stay as defence in depth
+        // and to keep migrate's documented post-condition true for a state built
+        // by hand in a test.
+        state.lock.delay = LockPolicy.clampDelay(state.lock.delay)
 
         // ── Grant configuration ──────────────────────────────────────────────
-        let canonicalPolicy = GrantPolicy(
+        state.grantPolicy = GrantPolicy(
             dailyLimit: state.grantPolicy.dailyLimit,
             defaultDuration: state.grantPolicy.defaultDuration,
             impulseDelay: state.grantPolicy.impulseDelay,
             usesLockDelay: state.grantPolicy.usesLockDelay
         )
-        if canonicalPolicy != state.grantPolicy {
-            repairs.append(.clampedGrantPolicy)
-            state.grantPolicy = canonicalPolicy
-        }
 
         // A ledger claiming more grants used than the limit allows is not
         // corruption — it is what lowering the daily limit mid-day produces, and

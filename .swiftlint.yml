@@ -1,0 +1,53 @@
+# SwiftLint configuration for Gate.
+#
+# THRESHOLDS BELOW ARE DERIVED FROM LINE COUNTS, NOT FROM A SWIFTLINT RUN.
+# There is no Swift toolchain in the environment this repo was authored in, so
+# `swiftlint lint` has never been executed against this tree. Run it once
+# locally before wiring `make lint` into CI — rules that the length rules
+# currently dominate (identifier_name, cyclomatic_complexity, large_tuple,
+# todo) may surface on the first real run.
+
+excluded:
+  - .build
+  - .swiftpm
+  - DerivedData
+  - Gate.xcodeproj
+
+# ── Length rules ─────────────────────────────────────────────────────────────
+# This codebase carries unusually heavy header documentation: every Kernel file
+# opens with the spec sections it implements and the invariants it guarantees.
+# That is deliberate — the Screen Time APIs are undertested and underdocumented,
+# and the reasoning is worth more than the brevity. The thresholds below are
+# raised to match, and comment-only lines are discounted where the rule allows.
+
+file_length:
+  warning: 1500
+  error: 2500
+  ignore_comment_only_lines: true
+
+type_body_length:
+  # Ratchet's primary type body is ~1600 lines and AppModel's ~1290. Both are
+  # single-responsibility types whose size is the exhaustive `Mutation` switch,
+  # not accumulated drift.
+  warning: 800
+  error: 1800
+
+function_body_length:
+  # ShieldWriter.swift:898 is ~211 lines.
+  warning: 120
+  error: 250
+
+line_length:
+  # Exactly one non-comment line in the tree exceeds 120 characters
+  # (AppGroupContainer.swift:338, a diagnostic string). Long lines are otherwise
+  # all prose in header comments, which `ignores_comments` discounts.
+  warning: 140
+  error: 250
+  ignores_comments: true
+  ignores_urls: true
+
+cyclomatic_complexity:
+  # `Ratchet.direction(of:in:)` is one switch over every Mutation case. Splitting
+  # it would lose the exhaustiveness check that is the whole point of the type.
+  warning: 20
+  error: 40

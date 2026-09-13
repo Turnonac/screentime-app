@@ -25,8 +25,19 @@
 //
 
 import Foundation
+
+// The Screen Time frameworks exist only on Apple platforms. `GateKernel` is
+// also built as a plain SwiftPM module so `make test` can exercise the pure
+// layer off-device, so every SDK symbol in this file sits behind a fence —
+// the same pattern Kernel/Engine/ScheduleBuilder.swift already uses. On iOS
+// every guard is true and the shipping build is unchanged.
+#if canImport(ManagedSettings)
 import ManagedSettings
+#endif
+
+#if canImport(DeviceActivity)
 import DeviceActivity
+#endif
 
 // MARK: - GateID
 
@@ -277,6 +288,7 @@ public enum GateID {
 
 // MARK: - ManagedSettingsStore.Name
 
+#if canImport(ManagedSettings)
 public extension ManagedSettingsStore.Name {
 
     /// The store that enforces one rule.
@@ -351,9 +363,11 @@ public extension ManagedSettingsStore.Name {
         rawValue.hasPrefix(GateID.namespace)
     }
 }
+#endif
 
 // MARK: - DeviceActivityName
 
+#if canImport(DeviceActivity)
 public extension DeviceActivityName {
 
     /// Whether this activity name belongs to Gate.
@@ -375,9 +389,11 @@ public extension DeviceActivityName {
         rawValue.hasPrefix(GateID.namespace)
     }
 }
+#endif
 
 // MARK: - DeviceActivityReport.Context
 
+#if canImport(DeviceActivity)
 public extension DeviceActivityReport.Context {
 
     /// The one report context v1 ships: a daily total-activity report rendered
@@ -406,6 +422,7 @@ public extension DeviceActivityReport.Context {
         Self(GateID.namespace + "totalActivity")
     }
 }
+#endif
 
 // MARK: - GateLimits
 

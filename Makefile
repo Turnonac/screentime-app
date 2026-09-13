@@ -203,12 +203,19 @@ test:
 	  echo "  Linux:  install a toolchain from https://swift.org/download"; \
 	  echo ""; \
 	  exit 1; }
-	@test -f $(TESTS_DIR)/Package.swift || { \
+	@test -f Package.swift || { \
 	  echo ""; \
-	  echo "ERROR: $(TESTS_DIR)/Package.swift not found."; \
+	  echo "ERROR: Package.swift not found in $$(pwd)."; \
 	  echo ""; \
-	  echo "  The Kernel test package is created in Phase 3.11 of"; \
-	  echo "  docs/06-build-plan.md. There is nothing to run yet."; \
+	  echo "  The Kernel test manifest lives at the REPO ROOT, not in $(TESTS_DIR)/:"; \
+	  echo "  SwiftPM refuses a target whose path escapes the package root, so a"; \
+	  echo "  $(TESTS_DIR)/Package.swift could not reach ../Kernel. Run make from"; \
+	  echo "  the repo root."; \
+	  echo ""; \
+	  exit 1; }
+	@test -d $(TESTS_DIR)/GateKernelTests || { \
+	  echo ""; \
+	  echo "ERROR: $(TESTS_DIR)/GateKernelTests not found — nothing to run."; \
 	  echo ""; \
 	  exit 1; }
 	cd $(TESTS_DIR) && $(SWIFT) test

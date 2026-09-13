@@ -58,11 +58,36 @@ public enum AppGroupContainer {
     /// (docs/05-architecture.md, single-writer discipline).
     public static let stateFileName = "state.plist"
 
+    /// `SelectionTable` — every `FamilyActivitySelection` blob in the install,
+    /// stored once and referenced from `state.plist` by id
+    /// (`Kernel/Model/Rule.swift`).
+    ///
+    /// A separate file, and not a field on `GateState`, for one arithmetic
+    /// reason: `GateState` has an 8 KB budget because the 6 MB monitor decodes
+    /// the whole of it on every callback, and selection blobs are large
+    /// "especially if you use `includeEntireCategory`"
+    /// (docs/05-architecture.md, persistence). Written only by the app.
+    public static let selectionsFileName = "selections.plist"
+
     /// Pre-rendered shield copy and colors, one entry per rule. Written only by
     /// the app; read by `GateShieldConfiguration`, which is network-blocked and
     /// latency-bounded and must return in microseconds
     /// (docs/03-hard-constraints.md #33).
     public static let shieldFileName = "shield.plist"
+
+    /// The fingerprint of the `DeviceActivitySchedule` each Gate activity was
+    /// last armed with (`Kernel/Engine/Reconciler.swift`).
+    ///
+    /// A **cache**, not state: `DeviceActivityName` does not encode the schedule
+    /// behind it and `DeviceActivityCenter.schedule(for:)` hands back a value
+    /// with no audited `Equatable` conformance, so "already armed" and "already
+    /// armed *correctly*" are otherwise indistinguishable
+    /// (`MonitorPlan.diff(against:armedFingerprints:)`). Losing it costs a round
+    /// of redundant `stopMonitoring`/`startMonitoring` calls and nothing else,
+    /// which is why it is the one file in the container the monitor extension
+    /// may write: the single-writer rule exists to protect `state.plist` and
+    /// `shield.plist`, whose loss would be a silently unenforced block.
+    public static let armedActivitiesFileName = "armed.plist"
 
     /// Append-only event directory. Written by extensions, drained by the app
     /// (see `Kernel/Store/InboxStore.swift`).
@@ -149,9 +174,19 @@ public enum AppGroupContainer {
         get throws { try url.appendingPathComponent(stateFileName, isDirectory: false) }
     }
 
+    /// `<container>/selections.plist`.
+    public static var selectionsURL: URL {
+        get throws { try url.appendingPathComponent(selectionsFileName, isDirectory: false) }
+    }
+
     /// `<container>/shield.plist`.
     public static var shieldURL: URL {
         get throws { try url.appendingPathComponent(shieldFileName, isDirectory: false) }
+    }
+
+    /// `<container>/armed.plist`.
+    public static var armedActivitiesURL: URL {
+        get throws { try url.appendingPathComponent(armedActivitiesFileName, isDirectory: false) }
     }
 
     /// `<container>/inbox/`.
@@ -310,8 +345,9 @@ public enum AppGroupContainer {
 
         lines.append("container: \(container.path)")
         lines.append("writable: \(FileManager.default.isWritableFile(atPath: container.path) ? "yes" : "NO")")
-        lines.append("  \(stateFileName): \(describe(container.appendingPathComponent(stateFileName)))")
-        lines.append("  \(shieldFileName): \(describe(container.appendingPathComponent(shieldFileName)))")
+        for name in [stateFileName, selectionsFileName, shieldFileName, armedActivitiesFileName] {
+            lines.append("  \(name): \(describe(container.appendingPathComponent(name)))")
+        }
 
         let inbox = container.appendingPathComponent(inboxDirectoryName, isDirectory: true)
         var isDirectory: ObjCBool = false

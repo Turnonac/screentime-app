@@ -1,0 +1,362 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate — CI.   docs/06-build-plan.md step 7.9
+#
+#
+#   ██  WHAT THIS CI CAN DO:     compile.
+#   ██  WHAT THIS CI CANNOT DO:  test any Screen Time behaviour. Ever.
+#
+# There is no Simulator support for any Screen Time API and there never has
+# been (docs/03-hard-constraints.md #11). On a simulator `requestAuthorization`
+# fails with `FamilyControlsError.invalidArgument` (code 3); the
+# FamilyActivityPicker, the shields, the DeviceActivityMonitor callbacks and
+# the DeviceActivityReport extension do not run at all. `AuthorizationCenter`,
+# `DeviceActivityCenter` and `ManagedSettingsStore` are equally unusable inside
+# a unit-test process, which is why `Kernel/` is written as pure, injectable
+# logic and everything that touches an Apple framework sits behind a seam.
+#
+# So a green check on this workflow means exactly four things:
+#
+#   1. the Config/ plists and entitlements still carry the exact strings that
+#      make the four extensions launchable at all (`make verify`);
+#   2. `project.yml` still generates, and nobody committed the generated
+#      Gate.xcodeproj;
+#   3. the Kernel's own unit tests pass;
+#   4. every target still compiles for the iOS Simulator SDK, and the four
+#      extensions still land in the right subdirectory of Gate.app.
+#
+# It does NOT mean a rule blocks an app, a shield renders, a monitor callback
+# arrives, a grant expires on time, or the Lock survives a reinstall. All of
+# that is physical-device-only and is signed off by hand, on real hardware,
+# against Docs/DEVICE-TEST-MATRIX.md. Budget that pass for EVERY release, on
+# both the shipping iOS and the current beta — the Screen Time API's known
+# failure modes (docs/03-hard-constraints.md §F) move between point releases.
+#
+# A release with a green CI and an unfilled device matrix is not tested.
+#
+#
+# Action versions are pinned to a major tag (`@v5`). To harden further, replace
+# each tag with the full commit SHA of the release you audited; the tag form is
+# kept here because it is the one a human can read and verify in review.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # ── Xcode ─────────────────────────────────────────────────────────────────
+  #
+  # docs/06-build-plan.md step 7.9 names Xcode_26.4.1. It is pinned to 26.5
+  # here instead, deliberately: the committed source calls three symbols that
+  # only exist in the iOS 26.5 SDK and will not COMPILE against 26.4 —
+  #
+  #   ShieldActionResponse.openParentalControlsApp   Extensions/ShieldAction/
+  #   ManagedSettingsStore.stores                    Kernel/Enforcement/TokenGuard.swift
+  #   ManagedSettingsStore.deleteStore()             Kernel/Enforcement/ShieldWriter.swift
+  #
+  # Each is guarded by `if #available(iOS 26.5, *)` so the shipped app still
+  # runs correctly on the iOS 17.0 deployment floor — but availability guards
+  # gate execution, not compilation. The SDK has to know the symbol.
+  #
+  # Raise this when the runner image drops 26.5; the MIN_IOS_SDK assertion
+  # below turns "image rotated Xcode out from under us" into a legible failure
+  # instead of several hundred "cannot find X in scope" errors.
+  XCODE_APP: /Applications/Xcode_26.5.app
+  MIN_IOS_SDK: "26.5"
+
+  # Keep Homebrew from updating the world (minutes) or cleaning up (nondeterminism).
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ANALYTICS: "1"
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 1 · Config invariants — Linux, ~20 seconds, no toolchain.
+  #
+  # `make verify` is pure grep by design (see the Makefile header). It is the
+  # only automated defence against the two silent, expensive misconfigurations
+  # on this stack:
+  #
+  #   • a wrong NSExtensionPointIdentifier — the extension builds, installs,
+  #     and is simply never launched. startMonitoring still succeeds and
+  #     DeviceActivityCenter().activities still lists the activity, so there is
+  #     no runtime signal whatsoever (docs/02-api-reference.md §3, trap 2);
+  #   • GateReport embedded as a plain app-extension — costs a full App Store
+  #     review cycle to discover (trap 3).
+  #
+  # It also rejects the two phantom `com.apple.developer.deviceactivity*`
+  # entitlement keys, which do not exist and break provisioning when present.
+  # ═══════════════════════════════════════════════════════════════════════════
+  config:
+    name: Config invariants (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: make verify
+        run: make verify
+
+      # The generated project must never be committed. `make verify` cannot
+      # catch this on its own: if Gate.xcodeproj were committed AND xcodegen
+      # regenerated it byte-identically, the dirty-tree check in the build job
+      # would pass and the repo would quietly have two sources of truth.
+      - name: Generated and local-only files must not be tracked
+        run: |
+          set -euo pipefail
+          fail=0
+
+          if git ls-files | grep -E '\.(xcodeproj|xcworkspace)(/|$)'; then
+            echo "::error::Gate.xcodeproj / .xcworkspace is committed."
+            echo "  project.yml is the single source of truth; the project is generated."
+            echo "  Fix:  git rm -r --cached Gate.xcodeproj && make project"
+            echo "  See:  docs/05-architecture.md, 'Project generation: XcodeGen'"
+            fail=1
+          fi
+
+          if git ls-files | grep -E '^Config/Local\.xcconfig$'; then
+            echo "::error::Config/Local.xcconfig is committed."
+            echo "  It carries a per-developer TEAM_ID and is git-ignored on purpose."
+            echo "  Fix:  git rm --cached Config/Local.xcconfig"
+            fail=1
+          fi
+
+          if git ls-files | grep -E '\.(mobileprovision|provisionprofile|p12|cer)$'; then
+            echo "::error::A signing asset is committed. Remove it and rotate it."
+            fail=1
+          fi
+
+          if [ "$fail" -eq 0 ]; then
+            echo "ok  no generated, local-only or signing files are tracked"
+          fi
+          exit "$fail"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 2 · Kernel unit tests.
+  #
+  # `Kernel/` is built as a SwiftPM package under Tests/, so `swift test` runs
+  # with no Xcode project, no simulator and no device (build plan step 3.11).
+  # These are the only automated tests this product can have, and the coverage
+  # the build plan asks of them is aimed at the parts that fail silently rather
+  # than loudly: Ratchet classification (one row of V1-4's table backwards is a
+  # silent bypass, not a crash), the setDelay asymmetry, LockClock across a
+  # simulated reinstall, DST and timezone boundaries in ScheduleBuilder, the
+  # 20-activity eviction, the 50-token guard, the ActivityNameCodec round-trip,
+  # and GateState forward-compat with unknown keys.
+  #
+  # It runs on macOS, not Linux: GateKernel imports `os`, and its
+  # ManagedSettings / DeviceActivity islands compile only against an Apple SDK.
+  # Nothing here has been built against a Linux toolchain and this workflow does
+  # not claim it can be.
+  #
+  # `make test` fails with an explicit message if Tests/Package.swift does not
+  # exist yet, rather than reporting a vacuous pass.
+  # ═══════════════════════════════════════════════════════════════════════════
+  kernel-tests:
+    name: Kernel tests (swift test)
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "::error::$XCODE_APP is not installed on this runner image."
+            echo "Available Xcode versions:"
+            ls -1d /Applications/Xcode*.app 2>/dev/null || echo "  (none)"
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_APP"
+          xcodebuild -version
+          swift --version
+
+      - name: make test
+        run: make test
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 3 · Generate the project, prove it is not committed, and compile everything.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: Generate + simulator build
+    runs-on: macos-26
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "::error::$XCODE_APP is not installed on this runner image."
+            echo "Available Xcode versions:"
+            ls -1d /Applications/Xcode*.app 2>/dev/null || echo "  (none)"
+            echo "Update XCODE_APP at the top of .github/workflows/ci.yml."
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_APP"
+          xcodebuild -version
+
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "iphonesimulator SDK: $sdk"
+
+          # version_ge A B  ->  true when A >= B
+          version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
+          if ! version_ge "$sdk" "$MIN_IOS_SDK"; then
+            echo "::error::iOS SDK $sdk is older than the required $MIN_IOS_SDK."
+            echo "  Gate compiles against symbols introduced in iOS $MIN_IOS_SDK"
+            echo "  (ShieldActionResponse.openParentalControlsApp,"
+            echo "   ManagedSettingsStore.stores, ManagedSettingsStore.deleteStore()),"
+            echo "  each behind an 'if #available' guard so the app still runs on"
+            echo "  the iOS 17.0 floor. Availability guards gate execution, not"
+            echo "  compilation — the SDK must know the symbols."
+            exit 1
+          fi
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          # project.yml declares `minimumXcodeGenVersion: 2.42.0` and xcodegen
+          # refuses to run below it, so no separate version assertion is needed
+          # here — a too-old XcodeGen would silently generate GateReport as a
+          # plain app-extension, which is the failure this guards.
+          xcodegen --version
+
+      # No Config/Local.xcconfig exists on CI, so TEAM_ID is empty. That is
+      # correct here: the build below disables code signing entirely, and an
+      # empty DEVELOPMENT_TEAM never reaches a signing phase.
+      - name: Generate Gate.xcodeproj
+        run: make project
+
+      # The pbxproj must never be committed, and generating it must never
+      # produce a diff. A dirty tree here means either (a) somebody committed
+      # a generated file, or (b) xcodegen wrote something outside .gitignore.
+      - name: Working tree must be clean after generation
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::'xcodegen generate' left the working tree dirty."
+            echo ""
+            echo "git status --porcelain:"
+            git status --porcelain
+            echo ""
+            echo "Diff of tracked files (first 200 lines):"
+            git --no-pager diff --stat
+            git --no-pager diff | head -n 200
+            echo ""
+            echo "Gate.xcodeproj is GENERATED and git-ignored. project.yml is the"
+            echo "single source of truth (docs/05-architecture.md). Never commit"
+            echo "the project file, and never hand-edit it."
+            exit 1
+          fi
+          echo "ok  working tree clean — nothing generated is tracked"
+
+      # Turn the one structurally-guaranteed failure into a legible one. The
+      # Gate app target's sources are `optional: true` in project.yml, so with
+      # App/ absent the target generates fine and then fails to link with an
+      # undefined `_main`, several hundred lines into the xcodebuild log.
+      - name: Preflight — app target has sources
+        run: |
+          set -euo pipefail
+          if [ ! -f App/GateApp.swift ]; then
+            echo "::error::App/GateApp.swift is missing — the Gate target has no sources."
+            echo ""
+            echo "  This is expected until docs/06-build-plan.md Phase 2.1 lands."
+            echo "  Everything below this step (compiling the app, the two"
+            echo "  frameworks and the four extensions) cannot run until it does."
+            echo ""
+            echo "  Present:"
+            for d in Kernel KernelUI Extensions App Tests; do
+              if [ -d "$d" ]; then echo "    $d/  ($(find "$d" -name '*.swift' | wc -l | tr -d ' ') swift files)"
+              else echo "    $d/  MISSING"; fi
+            done
+            exit 1
+          fi
+
+      # Compile only. `generic/platform=iOS Simulator` deliberately avoids
+      # naming a device or runtime: we are not running anything, and pinning a
+      # simulator name is a standing source of CI breakage when the image
+      # rotates. Signing is off because a simulator build needs no provisioning
+      # profile, and this repo has no Team ID.
+      - name: Build for iOS Simulator (compile only, unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Gate.xcodeproj \
+            -scheme Gate \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      # docs/02-api-reference.md §3, trap 3 — the one App Store trap on this
+      # stack that a build product can actually prove. GateReport is an
+      # ExtensionKit extension and belongs in Gate.app/Extensions/
+      # (dstSubfolderSpec = 16). The three classic NSExtension extensions belong
+      # in Gate.app/PlugIns/ (spec 13). Getting GateReport into PlugIns/ installs
+      # fine on device and is rejected by App Store Connect — one full review
+      # cycle to find out. `make verify` greps the pbxproj for this; the check
+      # below asserts it against the bundle that was actually produced.
+      - name: Verify embedded extension layout
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/Gate.app"
+          test -d "$app" || { echo "::error::$app was not produced."; exit 1; }
+
+          echo "Gate.app bundle layout:"
+          find "$app" -maxdepth 2 -name '*.appex' -print | sed "s|^$app|Gate.app|" | sort
+
+          fail=0
+          expect_at() {  # $1 = relative path that must exist
+            if [ -d "$app/$1" ]; then
+              echo "    ok    $1"
+            else
+              echo "    FAIL  missing: $1"; fail=1
+            fi
+          }
+
+          expect_at "Extensions/GateReport.appex"
+          expect_at "PlugIns/GateActivityMonitor.appex"
+          expect_at "PlugIns/GateShieldConfiguration.appex"
+          expect_at "PlugIns/GateShieldAction.appex"
+
+          if [ -d "$app/PlugIns/GateReport.appex" ]; then
+            echo "    FAIL  GateReport.appex is in PlugIns/ (dstSubfolderSpec 13)."
+            echo "          It must be embedded into Extensions/ (spec 16) as an"
+            echo "          ExtensionKit extension. See docs/02-api-reference.md §3,"
+            echo "          trap 3 — App Store Connect rejects the PlugIns/ form."
+            fail=1
+          fi
+          exit "$fail"
+
+      - name: Reminder — CI proves nothing about Screen Time
+        if: always()
+        run: |
+          echo "::notice title=Device pass still required::CI compiles only. No Screen Time API runs on a simulator or in a test process (docs/03-hard-constraints.md #11). Sign off Docs/DEVICE-TEST-MATRIX.md on physical hardware before any release."

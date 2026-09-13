@@ -62,9 +62,12 @@ private var lockLog: Logger {
 
 /// The lock clock's record: one in the Keychain, one mirrored into `GateState`.
 ///
-/// `GateState` should carry this as `var lockDeadline: LockDeadline?`
-/// (`Kernel/Model/GateState.swift`). The two copies are compared by
-/// ``revision`` on every launch; see ``LockClock/resolve(keychain:mirror:)``.
+/// `GateState` carries the mirror as ``GateState/lockClock``, a
+/// ``LockClockRecord`` (`Kernel/Model/LockPolicy.swift`). Convert across the two
+/// shapes with ``LockClockRecord/deadline(revision:armedAt:)`` and
+/// ``record(currentInstallID:)`` at the bottom of this file — those are the only
+/// two places allowed to do it. The two copies are compared by ``revision`` on
+/// every launch; see ``LockClock/resolve(keychain:mirror:)``.
 ///
 /// **`nil` and "cleared" are different, and the difference is load-bearing.**
 /// * A `nil` `LockDeadline?` means *there is no record at all* — a fresh install
@@ -121,6 +124,22 @@ public struct LockDeadline: Codable, Hashable, Sendable {
     /// shorter one would make reinstalling a discount.
     public var lockConfigHash: String
 
+    /// The ``GateState/installID`` of the install that wrote this record, when
+    /// it is known.
+    ///
+    /// Carried so that a round trip through the Keychain and back into
+    /// `GateState` is lossless — ``LockClockRecord/installID`` is the field that
+    /// makes ``LockClockRecord/isFromPreviousInstall(currentInstallID:)``
+    /// answerable, and that is the one moment the app can say something true
+    /// about a reinstall ("this delay was set before you reinstalled; it still
+    /// has 4h 12m to run") rather than silently re-imposing a deadline the user
+    /// does not remember (docs/04-product-spec.md V1-3).
+    ///
+    /// Optional because a Keychain item genuinely outlives the app version that
+    /// wrote it, and records written before this field existed have no value to
+    /// report. `nil` means "unknown", never "same install".
+    public var installID: UUID?
+
     /// Wall-clock time of the write. Tiebreak for ``revision``, and diagnostics.
     public var updatedAt: Date
 
@@ -132,6 +151,7 @@ public struct LockDeadline: Codable, Hashable, Sendable {
         earliestApplyAt: Date?,
         armedAt: Date?,
         lockConfigHash: String,
+        installID: UUID? = nil,
         updatedAt: Date
     ) {
         self.revision = revision
@@ -139,17 +159,24 @@ public struct LockDeadline: Codable, Hashable, Sendable {
         self.earliestApplyAt = earliestApplyAt
         self.armedAt = armedAt
         self.lockConfigHash = lockConfigHash
+        self.installID = installID
         self.updatedAt = updatedAt
     }
 
     /// A tombstone: "nothing is pending, as of this revision."
-    public static func cleared(revision: Int, lockConfigHash: String, now: Date) -> LockDeadline {
+    public static func cleared(
+        revision: Int,
+        lockConfigHash: String,
+        installID: UUID? = nil,
+        now: Date
+    ) -> LockDeadline {
         LockDeadline(
             revision: revision,
             pendingChangeID: nil,
             earliestApplyAt: nil,
             armedAt: nil,
             lockConfigHash: lockConfigHash,
+            installID: installID,
             updatedAt: now
         )
     }
@@ -157,7 +184,7 @@ public struct LockDeadline: Codable, Hashable, Sendable {
     // MARK: Lenient decoding
 
     private enum CodingKeys: String, CodingKey {
-        case revision, pendingChangeID, earliestApplyAt, armedAt, lockConfigHash, updatedAt
+        case revision, pendingChangeID, earliestApplyAt, armedAt, lockConfigHash, installID, updatedAt
     }
 
     /// Decodes with a default for every field.
@@ -175,6 +202,7 @@ public struct LockDeadline: Codable, Hashable, Sendable {
         self.earliestApplyAt = try container.decodeIfPresent(Date.self, forKey: .earliestApplyAt)
         self.armedAt = try container.decodeIfPresent(Date.self, forKey: .armedAt)
         self.lockConfigHash = try container.decodeIfPresent(String.self, forKey: .lockConfigHash) ?? ""
+        self.installID = try container.decodeIfPresent(UUID.self, forKey: .installID)
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
     }
 
@@ -580,6 +608,7 @@ public struct LockClock: Sendable {
         earliestApplyAt: Date,
         configHash: String,
         previous: LockDeadline?,
+        installID: UUID? = nil,
         now: Date = Date()
     ) throws -> LockDeadline {
         let deadline = LockDeadline(
@@ -588,6 +617,7 @@ public struct LockClock: Sendable {
             earliestApplyAt: earliestApplyAt,
             armedAt: now,
             lockConfigHash: configHash,
+            installID: installID,
             updatedAt: now
         )
         try writeKeychain(deadline)
@@ -604,11 +634,13 @@ public struct LockClock: Sendable {
     public func clear(
         configHash: String,
         previous: LockDeadline?,
+        installID: UUID? = nil,
         now: Date = Date()
     ) throws -> LockDeadline {
         let deadline = LockDeadline.cleared(
             revision: (previous?.revision ?? 0) &+ 1,
             lockConfigHash: configHash,
+            installID: installID,
             now: now
         )
         try writeKeychain(deadline)
@@ -708,5 +740,69 @@ public struct LockClock: Sendable {
         } catch {
             return "lock clock: unreadable — \(String(describing: error))"
         }
+    }
+}
+
+// MARK: - Bridging to GateState.lockClock
+
+// `GateState` stores the mirror as a ``LockClockRecord`` (`Kernel/Model/LockPolicy.swift`)
+// and this file stores the durable copy as a ``LockDeadline``. Two types, one
+// deadline: the model type is the shape that goes into `state.plist` and carries
+// the install identity; the store type adds the monotonic ``LockDeadline/revision``
+// that makes "which copy is newer" answerable without trusting a user-settable
+// device clock.
+//
+// These two conversions are the only place the shapes are allowed to meet, so
+// that `App/AppModel.swift` can write the one line the spec asks for:
+//
+//     let resolution = try lockClock.load(mirror: state.lockClock?.deadline(revision:))
+//
+// Both directions are total and lossless in the fields each type actually has.
+
+public extension LockClockRecord {
+
+    /// This record as the Keychain's shape.
+    ///
+    /// - Parameters:
+    ///   - revision: the revision to stamp. Pass the revision of the record
+    ///     currently in the Keychain — the mirror does not carry one, so a
+    ///     converted record can only claim to be newer if the caller says so.
+    ///     Defaults to `0`, which loses every comparison: the safe direction,
+    ///     because an unrevisioned mirror must never displace a real Keychain
+    ///     deadline (see ``LockDeadline/isNewer(than:)``).
+    ///   - armedAt: when the deadline was armed, if known. Used only to clamp a
+    ///     backwards clock in ``LockClock/remaining(_:now:)``.
+    func deadline(revision: Int = 0, armedAt: Date? = nil) -> LockDeadline {
+        LockDeadline(
+            revision: revision,
+            pendingChangeID: pendingChangeID,
+            earliestApplyAt: earliestApplyAt,
+            armedAt: armedAt,
+            lockConfigHash: lockConfigHash,
+            installID: installID,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+public extension LockDeadline {
+
+    /// This deadline as the `state.plist` mirror's shape.
+    ///
+    /// - Parameter currentInstallID: used only when this record does not carry
+    ///   an ``installID`` of its own — a Keychain item written by a build that
+    ///   predates the field. Attributing such a record to the *current* install
+    ///   is deliberately the conservative reading: it means
+    ///   ``LockClockRecord/isFromPreviousInstall(currentInstallID:)`` says "no",
+    ///   so the app stays quiet rather than claiming a reinstall it cannot
+    ///   evidence.
+    func record(currentInstallID: UUID) -> LockClockRecord {
+        LockClockRecord(
+            pendingChangeID: pendingChangeID,
+            earliestApplyAt: earliestApplyAt,
+            lockConfigHash: lockConfigHash,
+            installID: installID ?? currentInstallID,
+            updatedAt: updatedAt
+        )
     }
 }
