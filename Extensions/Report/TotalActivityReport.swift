@@ -218,7 +218,13 @@ struct TotalActivityConfiguration: Sendable, Equatable, Hashable {
 /// place that owns it — `Kernel/Identifiers.swift`, which spells it
 /// `"gate.totalActivity"`. A literal here that drifted by one character would
 /// render an empty rectangle with no error anywhere.
-struct TotalActivityReport: DeviceActivityReportScene {
+// `@preconcurrency` on the conformance: `DeviceActivityReportScene`'s
+// `Content` associated type is a SwiftUI `View`, whose isolation pulls the
+// conformance into main-actor-isolated code under Swift 6 strict concurrency
+// ("conformance ... crosses into main actor-isolated code and can cause data
+// races"). The protocol predates the concurrency model; treating it as
+// pre-concurrency is the sanctioned remedy rather than reshaping the scene.
+struct TotalActivityReport: @preconcurrency DeviceActivityReportScene {
 
     /// Computed rather than stored, mirroring `Kernel/Identifiers.swift`:
     /// `DeviceActivityReport` is `@MainActor`, so a stored property of its nested
@@ -249,7 +255,14 @@ struct TotalActivityReport: DeviceActivityReportScene {
     /// ceiling. A cancelled walk returns what it has rather than throwing — the
     /// view is about to be discarded either way, and a partial total is never
     /// shown long enough to mislead.
-    func makeConfiguration(
+    /// `nonisolated` is load-bearing, not decoration.
+    /// `DeviceActivityResults<DeviceActivityData>` is not `Sendable`, so if this
+    /// method inherits the type's main-actor isolation the compiler refuses to
+    /// let the host hand the results in at all ("non-Sendable parameter type ...
+    /// cannot be sent from caller of protocol requirement"). The walk touches no
+    /// UI and must not run on the main actor regardless — it is the aggregation
+    /// pass over the whole result tree.
+    nonisolated func makeConfiguration(
         representing data: DeviceActivityResults<DeviceActivityData>
     ) async -> TotalActivityConfiguration {
         reportLog.debug("aggregation started")
