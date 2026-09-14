@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Export options for the TestFlight / App Store archive.
+	  Used by `xcodebuild -exportArchive -exportOptionsPlist`.
+
+	  `teamID` is intentionally absent: it comes from DEVELOPMENT_TEAM, which
+	  Config/Build.xcconfig reads from TEAM_ID. In CI that is injected from the
+	  APPLE_TEAM_ID secret, so the team is never committed to this repo.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<!-- Let Xcode create and download the distribution profiles for the app and
+	     all four extensions using the App Store Connect API key. This is what
+	     makes the whole pipeline work without anyone ever opening Xcode: there
+	     are five bundle IDs to provision and doing it by hand needs a Mac. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- Bitcode has been dead since Xcode 14; declaring it explicitly keeps the
+	     export from warning about a default that has changed before. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

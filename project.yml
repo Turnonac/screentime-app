@@ -187,6 +187,13 @@ targets:
       - path: App
         optional: true
 
+      # The app icon. App Store Connect rejects an upload with no icon
+      # (ITMS-90022), and TestFlight is an App Store Connect upload, so this is
+      # required before the first build can reach a device that way. The source
+      # PNG is 1024x1024 RGB with NO alpha channel — an alpha channel is its own
+      # rejection (ITMS-90717).
+      - path: App/Assets.xcassets
+
       # Privacy manifest (docs/06-build-plan.md step 7.1). One per bundle, five
       # total — this one plus the four extensions, which share
       # Config/Privacy/Extension/PrivacyInfo.xcprivacy.

@@ -29,7 +29,7 @@ been observed, because none of it can run on a simulator or in a test process.
 | 3 — `Kernel/` (model, store, ratchet, scheduling, enforcement, reconciler) | Written |
 | 4 — The four extensions | Written |
 | 5 — `App/` (SwiftUI screens, `AppModel`, reconcile-on-foreground) | Written and compiling — `GateApp`, `AppModel`, seven screens, `Debug/`. |
-| 6 — Personally useful dev-signed build | **Not reached.** Needs a Mac, Xcode 26.5+ and a physical device — none of which have touched this tree. |
+| 6 — Personally useful build on a real device | **Not reached**, but no longer needs a Mac: `.github/workflows/testflight.yml` archives and uploads from CI. Setup in `Docs/TESTFLIGHT.md`. |
 | 7 — App Store readiness (privacy manifests, CI, review notes) | CI green. Review notes and all five privacy manifests written; none validated by a real archive |
 
 Concretely, that means:

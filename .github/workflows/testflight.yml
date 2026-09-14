@@ -1,0 +1,218 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate — TestFlight release.
+#
+# The point of this workflow: put a build on a physical iPhone WITHOUT a Mac.
+#
+# Everything Gate actually does is unobservable until it runs on real hardware
+# (docs/03-hard-constraints.md #11 — no Screen Time API works on a simulator or
+# in a test process). The normal way to get there is Xcode on a Mac. This is the
+# other way: GitHub's macOS runner archives and uploads, and the build arrives
+# in TestFlight on the phone.
+#
+# INTERNAL testers need no App Review, so a build is installable within minutes
+# of upload finishing. See Docs/TESTFLIGHT.md for the one-time setup.
+#
+#   ██  THIS REQUIRES THE FAMILY CONTROLS **DISTRIBUTION** ENTITLEMENT.
+#
+# TestFlight is an App Store Connect upload, and Apple DTS is explicit that the
+# distribution entitlement gates it — internal testers included. If the five App
+# IDs do not carry it, the archive step fails at signing. Confirm first:
+#
+#   security cms -D -i <profile>.mobileprovision | grep -A2 family-controls
+#
+# Signing is fully automatic: `-allowProvisioningUpdates` plus an App Store
+# Connect API key lets Xcode create the distribution certificate and all five
+# provisioning profiles on the runner. Nothing is committed and no Mac is needed
+# to bootstrap them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      whats_new:
+        description: "What to Test note shown to testers"
+        required: false
+        default: "Automated build from CI."
+
+concurrency:
+  group: testflight-${{ github.ref }}
+  cancel-in-progress: false      # never interrupt an in-flight upload
+
+permissions:
+  contents: read
+
+env:
+  XCODE_APP: /Applications/Xcode_26.5.app
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+jobs:
+  upload:
+    name: Archive + upload to TestFlight
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check required secrets are present
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for v in KEY_ID ISSUER_ID KEY_P8 TEAM_ID; do
+            if [ -z "${!v:-}" ]; then echo "::error::Secret for $v is not set."; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "Set all four under Settings -> Secrets and variables -> Actions:"
+            echo "  ASC_KEY_ID      the App Store Connect API key id"
+            echo "  ASC_ISSUER_ID   the issuer id shown above the key list"
+            echo "  ASC_KEY_P8      the FULL contents of the AuthKey_XXXX.p8 file"
+            echo "  APPLE_TEAM_ID   your 10-character Team ID"
+            echo ""
+            echo "Step-by-step: Docs/TESTFLIGHT.md"
+            exit 1
+          fi
+          echo "ok  all four secrets present"
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          test -d "$XCODE_APP" || {
+            echo "::error::$XCODE_APP missing. Available:"; ls -1d /Applications/Xcode*.app; exit 1; }
+          sudo xcode-select --switch "$XCODE_APP"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # The API key has to exist as a file for xcodebuild, and in the keys
+      # directory altool searches. Written outside the workspace so it can never
+      # be picked up by a build phase or left in an artifact.
+      - name: Write the App Store Connect API key
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/private_keys
+          printf '%s\n' "$KEY_P8" > ~/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
+          echo "ok  key written (contents never logged)"
+
+      # TEAM_ID is the one build setting that cannot live in the repo. It goes
+      # into the git-ignored Local.xcconfig that Build.xcconfig already includes.
+      - name: Configure the team
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          printf 'TEAM_ID = %s\n' "$TEAM_ID" > Config/Local.xcconfig
+          echo "ok  Config/Local.xcconfig written"
+
+      - name: Generate Gate.xcodeproj
+        run: make project
+
+      # Every upload needs a build number App Store Connect has not seen before,
+      # and it must increase. The run number is monotonic per workflow and needs
+      # no commit back to the repo.
+      - name: Set the build number
+        run: |
+          set -euo pipefail
+          echo "CURRENT_PROJECT_VERSION = ${GITHUB_RUN_NUMBER}" >> Config/Local.xcconfig
+          echo "build number: ${GITHUB_RUN_NUMBER}"
+
+      - name: Archive
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Gate.xcodeproj \
+            -scheme Gate \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Gate.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      # Proves the four extensions are actually inside the archived app before
+      # anything is uploaded. An .appex that silently failed to embed produces an
+      # app that installs and simply never blocks anything.
+      - name: Verify the archive embeds all four extensions
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/Gate.xcarchive/Products/Applications/Gate.app"
+          test -d "$app" || { echo "::error::no Gate.app in the archive"; exit 1; }
+          find "$app" -maxdepth 2 -name '*.appex' | sed "s|^$app|Gate.app|" | sort
+          fail=0
+          for p in Extensions/GateReport.appex \
+                   PlugIns/GateActivityMonitor.appex \
+                   PlugIns/GateShieldConfiguration.appex \
+                   PlugIns/GateShieldAction.appex; do
+            if [ -d "$app/$p" ]; then echo "  ok    $p"; else echo "  FAIL  missing $p"; fail=1; fi
+          done
+          exit "$fail"
+
+      - name: Export the .ipa
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Gate.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist Config/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+          ls -lh "$RUNNER_TEMP/export"
+
+      - name: Upload to TestFlight
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          ipa="$(find "$RUNNER_TEMP/export" -name '*.ipa' | head -1)"
+          test -n "$ipa" || { echo "::error::no .ipa was exported"; exit 1; }
+          echo "uploading $ipa"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$ipa" \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+      - name: Where to find it
+        if: success()
+        run: |
+          echo "::notice title=Uploaded::Build ${GITHUB_RUN_NUMBER} is uploaded. App Store Connect processes it for 5-15 minutes, then it appears in the TestFlight app on any device signed in as an internal tester. Internal testers need no App Review."
+
+      # The archive is worth keeping on a failed upload: it contains the dSYMs
+      # and the exact signed bundle, and re-uploading beats re-archiving.
+      - name: Keep the archive on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gate-xcarchive-${{ github.run_number }}
+          path: ${{ runner.temp }}/Gate.xcarchive
+          retention-days: 5
+
+      - name: Remove the API key
+        if: always()
+        run: rm -rf ~/private_keys Config/Local.xcconfig
