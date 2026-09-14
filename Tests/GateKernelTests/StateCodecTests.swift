@@ -942,7 +942,11 @@ struct TokenGuardTests {
         )
         let issues = overloaded.validate()
         #expect(issues.contains(.tokenCapExceeded(collection: .applications, count: 51, limit: 50)))
-        #expect(issues.contains(where: \.isBlocking))
+        // An explicit closure, not `where: \.isBlocking`. `contains(where:)` is
+        // `rethrows`, and the #expect expansion loses the non-throwing proof
+        // through a key-path literal — it reports "call can throw, but it is
+        // not marked with 'try'" at a source location inside the macro.
+        #expect(issues.contains { $0.isBlocking })
 
         let nameless = Rule(id: ruleID, name: "   ", createdAt: now, updatedAt: now)
         #expect(nameless.validate().contains(.emptyName))
