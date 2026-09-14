@@ -192,8 +192,10 @@ extension KeyedDecodingContainer {
     /// must degrade field by field rather than leaving the user with no rules and
     /// no block.
     func gateValue<T: Decodable>(_ type: T.Type = T.self, forKey key: Key, default fallback: T) -> T {
+        // `try?` flattens what `decodeIfPresent` returns, so this is already
+        // `T`, not `T?` — a missing key fails the guard and takes the fallback.
         guard let decoded = try? decodeIfPresent(T.self, forKey: key) else { return fallback }
-        return decoded ?? fallback
+        return decoded
     }
 
     /// Decodes an optional `key`, yielding `nil` for missing, null or malformed.

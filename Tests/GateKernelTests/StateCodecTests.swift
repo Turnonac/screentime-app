@@ -1052,7 +1052,14 @@ struct StateStoringContractTests {
         try store.save(state)
         #expect(store.generation == 1)
 
-        let change = try #require(store.loadIfChanged(since: 0))
+        // The throwing call is hoisted out of the macro on purpose.
+        // `#require` rewrites its argument into a non-throwing closure
+        // (`Testing.__checkFunctionCall(store.self, calling: { $0.loadIfChanged(...) })`),
+        // so the outer `try` does not cover the call and it fails to compile.
+        // Only a throwing call needs this; the other `try #require(...)` sites in
+        // this suite wrap plain optionals and are fine as they are.
+        let loaded = try store.loadIfChanged(since: 0)
+        let change = try #require(loaded)
         #expect(change.generation == 1)
         #expect(change.state == state)
         let stillCurrent = try store.loadIfChanged(since: 1)
