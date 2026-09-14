@@ -570,7 +570,9 @@ final class AppModel {
         // Authorization went away while we were backgrounded. Every token we
         // hold is voided (docs/02-api-reference.md §5), so this is a recovery
         // situation and not an error banner.
-        appLog.notice("authorization lost: \(String(describing: authorizationStatus), privacy: .public)")
+        // `self.` is required: Logger interpolation is an autoclosure, so this
+        // is a closure capture rather than a plain property read.
+        appLog.notice("authorization lost: \(String(describing: self.authorizationStatus), privacy: .public)")
         recovery = .authorizationLost
         noteTokenExpiry(source: "authorizationStatus")
     }
@@ -810,14 +812,20 @@ final class AppModel {
         guard tokenExpiryObservation == nil else { return }
         guard #available(iOS 26.5, *) else { return }
 
-        // The typed-message API has no single-argument form: the overload is
-        // `addObserver(of:for:using:)` and needs the subject type. Observing the
-        // *type* rather than one instance is what this wants — an expiry can
-        // concern any store. `ManagedSettingsStore` is a class, so it satisfies
-        // the `Subject: AnyObject` requirement.
+        // The name-keyed API, not the typed-message overload.
+        // `addObserver(of:for:using:)` requires the message to conform to
+        // `NotificationCenter.MainActorMessage`, and `TokenExpiryMessage` does
+        // not — the compiler says so outright. Rather than guess which of the
+        // typed overloads it does fit, this uses the name every
+        // `NotificationCenter.Message` is required to publish, which is stable
+        // across both and posts as an ordinary Notification either way.
+        //
+        // This observation is an accelerator, not a floor: the three recovery
+        // routes documented above all work on iOS 17 without it.
         tokenExpiryObservation = NotificationCenter.default.addObserver(
-            of: ManagedSettingsStore.self,
-            for: ManagedSettingsStore.TokenExpiryMessage.self
+            forName: ManagedSettingsStore.TokenExpiryMessage.name,
+            object: nil,
+            queue: .main
         ) { [weak self] _ in
             // The hop is explicit rather than relying on the closure's isolation,
             // which is part of the same unverified spelling. A `@MainActor` class
