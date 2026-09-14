@@ -290,7 +290,9 @@ public struct GateCountdownSchedule: TimelineSchedule, Sendable {
              first: Date) {
             self.deadline = deadline
             self.granularity = granularity
-            self.floorInterval = max(floorInterval, GateCountdownSchedule.liveFloor)
+            // `Swift.max`, not `max`: this type conforms to Sequence, whose
+            // `max()` instance method shadows the global two-argument function.
+            self.floorInterval = Swift.max(floorInterval, GateCountdownSchedule.liveFloor)
             self.upcoming = first
         }
 
@@ -298,7 +300,7 @@ public struct GateCountdownSchedule: TimelineSchedule, Sendable {
             guard let current = upcoming else { return nil }
             let remaining = deadline.timeIntervalSince(current)
             if remaining > 0 {
-                let step = max(
+                let step = Swift.max(
                     floorInterval,
                     GateCountdown.secondsUntilTextChanges(remaining: remaining,
                                                           granularity: granularity)
