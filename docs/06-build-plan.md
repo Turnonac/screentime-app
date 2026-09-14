@@ -165,7 +165,11 @@ Expire grants and pending changes → recompute intended shields → write store
 
 ### PHASE 7 — App Store readiness (only once "Assigned" appears)
 
-**Step 7.1 — Privacy manifests, five of them.** `Config/Privacy/App-PrivacyInfo.xcprivacy` plus one copy per `.appex`, each added to that target's **Copy Bundle Resources** phase. Each contains:
+**Step 7.1 — Privacy manifests, five of them.** One for the app plus one per `.appex`, each added to that target's **Copy Bundle Resources** phase.
+
+> **Basename trap.** The file must be named `PrivacyInfo.xcprivacy` *inside the bundle*. A source file named `App-PrivacyInfo.xcprivacy` copies in under that name and Apple silently ignores it — you get ITMS-91053 with a manifest sitting right there in the bundle. Give each manifest its own directory instead of a distinguishing prefix: `Config/Privacy/App/PrivacyInfo.xcprivacy` and `Config/Privacy/Extension/PrivacyInfo.xcprivacy`.
+
+Each contains:
 ```xml
 <key>NSPrivacyTracking</key><false/>
 <!-- deliberately NO NSPrivacyTrackingDomains key — its presence with tracking=false is INVALID -->
@@ -180,9 +184,13 @@ Expire grants and pending changes → recompute intended shields → write store
   </dict>
 </array>
 ```
-`1C8F.1` is the App-Group-shared reason, **not** `CA92.1`. Add `NSPrivacyAccessedAPICategoryFileTimestamp` / `C617.1` if you stat files in the App Group container, and `NSPrivacyAccessedAPICategorySystemBootTime` / `35F9.1` if you use `mach_absolute_time`-family elapsed-time measurement. **Do not pre-declare categories you do not hit** — an incorrect declaration is itself rejectable (ITMS-91054/91055).
+`1C8F.1` is the App-Group-shared reason, **not** `CA92.1`.
 
-**Step 7.2 — Validate.** `plutil -lint Config/Privacy/*.xcprivacy` on each, then Product → Archive → Organizer → **Generate Privacy Report**.
+`NSPrivacyAccessedAPICategoryFileTimestamp` / `C617.1` **is required**, in all five manifests — the condition is met, not hypothetical. `ShieldCopyCache.stamp(of:)` (`Extensions/ShieldConfiguration/GateShieldConfiguration.swift`) reads `.contentModificationDateKey` on `shield.plist` on every shield presentation, and `AppGroupContainer.describe(_:)` (`Kernel/Store/AppGroupContainer.swift`) does the same for the debug screen. `GateKernel` is embedded once and linked by all four `.appex` bundles, so every manifest inherits the second call site. If both call sites are ever deleted, delete the declaration with them.
+
+`NSPrivacyAccessedAPICategorySystemBootTime` / `35F9.1` stays conditional **and is not met**: `LockClock` deliberately avoids `ProcessInfo.systemUptime` and nothing in the tree uses a `mach_absolute_time`-family clock. Declare it only if that changes. **Do not pre-declare categories you do not hit** — an incorrect declaration is itself rejectable (ITMS-91054/91055).
+
+**Step 7.2 — Validate.** `plutil -lint Config/Privacy/*/PrivacyInfo.xcprivacy`, then Product → Archive → Organizer → **Generate Privacy Report**.
 
 **Step 7.3 — App Privacy answers: "Data Not Collected"**, truthfully, for a v1 with no account, no server, and no analytics. Apple defines "collect" as transmitting off-device; the report extension renders locally and tokens are opaque. **Adding RevenueCat, Crashlytics, or the v2 partner heartbeat breaks this** — the nutrition label covers the whole binary including bundled SDKs.
 

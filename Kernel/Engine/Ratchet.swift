@@ -243,6 +243,10 @@ public enum Mutation: Sendable, Equatable, Hashable {
 
     /// Change the lock type. **Always a loosening** (V1-3, verbatim: "Changing
     /// the lock *type* is a loosening and goes through the lock").
+    ///
+    /// Refused in exactly one case: a switch to a pure ``LockKind/password``
+    /// Lock with no passphrase on file, which nothing could ever release. See
+    /// ``Ratchet/Refusal/lockKindNeedsPassphrase``.
     case setLockKind(LockKind)
 
     /// Set the partner passphrase, once, during setup.
@@ -564,6 +568,20 @@ public struct Ratchet {
         /// Re-setting one afterwards is a documented follow-up that needs a new
         /// `Operation` case first.
         case lockPasswordChangeUnavailable
+
+        /// Switching to a pure ``LockKind/password`` Lock with no passphrase on
+        /// file. Such a Lock accepts no passphrase (``LockPolicy/verify``
+        /// answers ``PasswordVerification/notConfigured``) and ripens on no
+        /// clock (``LockKind/acceptsDelay`` is false), so every future loosening
+        /// is trapped forever — and it cannot be undone from inside the app,
+        /// because a passphrase is unsettable once the Lock has been armed
+        /// (``Refusal/lockPasswordChangeUnavailable``) and every route back is
+        /// itself a loosening. The mirror of the demotion in `applyReleased`'s
+        /// `clearLockPassword` case.
+        ///
+        /// Only `.password` is refused. ``LockKind/both`` with no digest is
+        /// merely redundant — it still ripens on the clock.
+        case lockKindNeedsPassphrase(LockKind)
 
         /// The mutation is a loosening with no ``PendingChange/Operation`` to be
         /// queued as, so it can be neither applied nor deferred.
@@ -1367,7 +1385,10 @@ public struct Ratchet {
         case .setLockPassword:
             return lockPasswordRefusal(in: state)
 
-        case .reorderRules, .setLockDelay, .setLockKind, .clearLockPassword,
+        case .setLockKind(let kind):
+            return lockKindRefusal(kind, in: state)
+
+        case .reorderRules, .setLockDelay, .clearLockPassword,
              .setRatchet, .setInstallProtection, .revokeAuthorization,
              .completeOnboarding, .markTokenExpiry:
             return nil
@@ -1400,6 +1421,19 @@ public struct Ratchet {
             && state.lock.password == nil
             && state.pendingChanges.pending.isEmpty
         return neverArmed ? nil : .lockPasswordChangeUnavailable
+    }
+
+    /// See ``Refusal/lockKindNeedsPassphrase``.
+    ///
+    /// Deliberately narrow: only the pure `.password` kind, and only when no
+    /// digest is on file. `.both` with no digest still offers the clock
+    /// (``ReleasePaths/available(under:)``), and a no-op re-selection of the
+    /// current kind must stay free so an already-wedged state written by another
+    /// build does not also lose its no-op path.
+    private static func lockKindRefusal(_ kind: LockKind, in state: GateState) -> Refusal? {
+        guard kind != state.lock.kind else { return nil }
+        guard !kind.acceptsDelay, state.lock.password == nil else { return nil }
+        return .lockKindNeedsPassphrase(kind)
     }
 
     // MARK: - Assess
@@ -1768,7 +1802,7 @@ public struct Ratchet {
     // MARK: - The lock clock mirror
 
     /// The Keychain mirror the current queue implies, or `nil` when nothing is
-    /// queued.
+    /// queued **and no adopted deadline is still running**.
     ///
     /// The App Group container is deleted with the app; Keychain items are not
     /// (docs/04-product-spec.md V1-3). Mirroring the soonest live deadline is
@@ -1778,9 +1812,13 @@ public struct Ratchet {
     /// password-only — a ``LockKind/password`` lock, where nothing ripens on time
     /// — the oldest one anchors the record with a `nil` date, so the Keychain
     /// still records that the Lock is engaged rather than reading as idle.
+    ///
+    /// An empty queue is **not** automatically an idle Lock. See
+    /// ``survivingMirror(in:now:)``: the whole point of V1-3's Keychain copy is
+    /// the install that has a deadline and no queue to derive it from.
     public static func lockClockMirror(for state: GateState, now: Date) -> LockClockRecord? {
         let open = state.pendingChanges.pending
-        guard !open.isEmpty else { return nil }
+        guard !open.isEmpty else { return survivingMirror(in: state, now: now) }
 
         let dated = open.filter { $0.earliestApplyAt != nil }
         let soonest = dated.min(by: { lhs, rhs in
@@ -1797,6 +1835,50 @@ public struct Ratchet {
             installID: state.installID,
             updatedAt: now
         )
+    }
+
+    /// A deadline that is still running even though this install has no queue to
+    /// derive it from — the reinstall case, and the entire reason the Keychain
+    /// copy exists.
+    ///
+    /// After delete-and-reinstall the App Group container is gone, so the fresh
+    /// `GateState` has no pending changes at all. `AppModel.resolveLockClock`
+    /// adopts the surviving Keychain deadline into ``GateState/lockClock`` at
+    /// launch; the very next reconcile then calls this projection, sees an empty
+    /// queue, and — before this function existed — answered `nil`. `advance`
+    /// wrote that `nil` back over the adopted record *and* set
+    /// ``SideEffects/mirrorsLockClock``, which rewrites the Keychain item as a
+    /// tombstone. Deleting the app cleared the delay, in two steps, silently.
+    /// That is the exact outcome V1-3 exists to prevent.
+    ///
+    /// Three conditions, all required:
+    ///
+    /// * **The record describes a deadline.** A tombstone (`pendingChangeID ==
+    ///   nil`) is the Lock saying "nothing is queued", and must stay that way.
+    /// * **It is foreign to this install's queue.** Either it was written by a
+    ///   previous install, or it names a change this `GateState` has no record
+    ///   of. A record naming a change *this* install resolved is a stale mirror
+    ///   and must be cleared — that is the ordinary "the wait is over" path, and
+    ///   preserving it would make every satisfied deadline immortal.
+    /// * **It has not ripened.** A deadline whose time has passed has been paid.
+    ///   Note that a `nil` ``LockClockRecord/earliestApplyAt`` is never ripe by
+    ///   construction: under a ``LockKind/password`` Lock the surviving record
+    ///   means "engaged, releasable only by the passphrase", which is exactly
+    ///   what the Keychain should keep saying.
+    ///
+    /// Returned **verbatim**, `updatedAt` included: re-stamping it with `now`
+    /// would make this no-op projection outrank a real Keychain deadline under
+    /// ``LockClockRecord/merge(appGroup:keychain:)``'s "trust the newer copy"
+    /// rule. Identity is also what lets `Reconciler.describesSameDeadline`
+    /// suppress both the state write and the Keychain rewrite.
+    private static func survivingMirror(in state: GateState, now: Date) -> LockClockRecord? {
+        guard let record = state.lockClock, let changeID = record.pendingChangeID else {
+            return nil
+        }
+        let foreign = record.isFromPreviousInstall(currentInstallID: state.installID)
+            || !state.pendingChanges.contains { $0.id == changeID }
+        guard foreign, !record.isRipe(at: now) else { return nil }
+        return record
     }
 
     /// Recomputes ``GateState/lockClock`` and reports whether the Keychain copy
@@ -2014,7 +2096,17 @@ public struct Ratchet {
             state.lock.delay = LockPolicy.clampDelay(seconds)
             state.lock.updatedAt = now
 
-        case .setLockKind(let kind):
+        case .setLockKind(let requested):
+            // **Never land a `.password`-only Lock with no passphrase** — the
+            // same trap the `clearLockPassword` case below refuses to create.
+            // `lockKindRefusal` blocks it at queue time; this is the backstop for
+            // the interleaving that check cannot see. `.setLockKind` and
+            // `.clearLockPassword` have different `targetKey`s, so both can be
+            // open at once, and `releaseRipe` applies in deadline order — the
+            // passphrase removal can land first and leave this change valid when
+            // it was queued and fatal when it lands.
+            let kind: LockKind =
+                (!requested.acceptsDelay && state.lock.password == nil) ? .delay : requested
             state.lock.kind = kind
             // A kind that cannot use a passphrase must not keep one on file: a
             // stored digest that nothing consults is a secret with no purpose,

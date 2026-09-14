@@ -118,6 +118,10 @@ public enum ReconcileRole: String, Sendable, Hashable, CaseIterable {
     /// Draining deletes the files it reads, so a role that cannot persist what
     /// it drained must not drain: it would destroy a grant request the user is
     /// on their way to complete.
+    ///
+    /// The role is the static half of that test. `reconcile` applies the same
+    /// rule to the pass in front of it — a `state.plist` from a newer build
+    /// refuses every write, and a pass under one does not drain either.
     public var drainsInbox: Bool { self == .app }
 
     /// Whether this role may write `ManagedSettingsStore`s and the daemon's
@@ -258,6 +262,35 @@ public struct ReconcileOptions: Sendable {
     /// ``ReconcileRole/appendsBreadcrumb``.
     public var appendsBreadcrumb: Bool
 
+    /// Read — never delete — the `.grantIssued` records still in `inbox/` and
+    /// fold them into the working state for this pass only.
+    ///
+    /// This is what makes the iOS 26.4+ shield submenu do anything at all. The
+    /// submenu runs in `GateShieldAction`, which may not write `state.plist`, so
+    /// it records the grant in `inbox/` and arms a one-shot activity whose
+    /// interval already started — iOS delivers `intervalDidStart` almost
+    /// immediately and the **monitor** is the first process to wake. Without this
+    /// option that pass reads a `state.plist` that has never heard of the grant
+    /// and re-asserts the shield the user just paid to lift; the lift would not
+    /// land until the app was next foregrounded, which is precisely the thing the
+    /// submenu exists to avoid.
+    ///
+    /// Defaults to `role.writesEnforcement && !role.drainsInbox`, which is the
+    /// monitor and only the monitor:
+    ///
+    /// * ``ReconcileRole/app`` drains for real and persists the result, so
+    ///   folding a peeked copy first would double-count it.
+    /// * ``ReconcileRole/dryRun`` writes no enforcement, so there is nothing for
+    ///   a fold to affect.
+    ///
+    /// **Read-only in both directions.** Nothing is deleted and nothing is
+    /// persisted — a pass with this set has `writesState == false` — so the
+    /// records are still there for the app to drain, and the ledger is still
+    /// decremented in exactly one place. The cost of being wrong is one extra
+    /// recomputation on the next pass, which is the same bargain
+    /// ``ReconcileRole/monitor`` already makes for every other deadline.
+    public var foldsPendingGrants: Bool
+
     /// Most backstop moments to report. Eight is two days of a pair of daily
     /// windows, which is more notifications than any user wants scheduled at
     /// once.
@@ -282,6 +315,7 @@ public struct ReconcileOptions: Sendable {
         self.writesEnforcement = role.writesEnforcement
         self.publishesShieldCopy = role.publishesShieldCopy
         self.appendsBreadcrumb = role.appendsBreadcrumb
+        self.foldsPendingGrants = role.writesEnforcement && !role.drainsInbox
     }
 }
 
@@ -689,9 +723,15 @@ public struct ReconcileReport: Sendable, Equatable {
         public let requests: [InterventionRequest]
 
         /// Grants actually issued while folding (the iOS 26.4+ submenu path,
-        /// docs/04-product-spec.md V2-1). Always empty in v1: v1 never writes a
-        /// `grantIssued` event, because the grant is earned on the intervention
-        /// screen, not at the shield.
+        /// docs/04-product-spec.md V2-1).
+        ///
+        /// Empty on any device below iOS 26.4, where no submenu exists and the
+        /// grant is earned on the intervention screen rather than at the shield.
+        /// On 26.4+ `GateShieldAction.grantFromSubmenu` writes a `.grantIssued`
+        /// event, so this is non-empty whenever such a tap was folded — by the
+        /// app's drain, or read-only by the monitor under
+        /// ``ReconcileOptions/foldsPendingGrants``, in which case the same record
+        /// is folded again, for real, on the app's next foreground.
         public let issued: [Grant]
 
         /// Why issuance was refused, by reason.
@@ -1151,7 +1191,9 @@ public extension Reconciler {
         /// Shield taps reconstructed from the drain, oldest first.
         public let requests: [InterventionRequest]
 
-        /// Grants issued while folding. Empty in v1.
+        /// Grants issued while folding — the iOS 26.4+ shield-submenu path
+        /// (docs/04-product-spec.md V2-1). Empty below 26.4, where nothing writes
+        /// a ``InboxEvent/Kind/grantIssued`` record.
         public let issued: [Grant]
 
         /// Why issuance was refused, by reason.
@@ -1191,9 +1233,14 @@ public extension Reconciler {
     ///   a grant. The reconstructed ``InterventionRequest`` is returned so the
     ///   app can put the intervention screen in front of them.
     /// * ``InboxEvent/Kind/grantIssued`` — a grant the shield extension already
-    ///   decided (the iOS 26.4+ submenu, docs/04-product-spec.md V2-1). v1 never
-    ///   writes one. Routed through ``GrantEngine/issue(for:in:now:calendar:isAuthorized:duration:reason:grantID:maxAge:)``
-    ///   so the daily budget is decremented in exactly one place.
+    ///   decided (the iOS 26.4+ submenu, docs/04-product-spec.md V2-1; written
+    ///   whenever the device has the submenu at all). Routed through
+    ///   ``GrantEngine/issue(for:in:now:calendar:isAuthorized:duration:reason:grantID:maxAge:)``
+    ///   so the daily budget is decremented in exactly one place, and the grant
+    ///   adopts the event's `id` so it inherits the one-shot expiry activity the
+    ///   extension already armed. This is the one kind a non-draining pass may
+    ///   fold read-only (``ReconcileOptions/foldsPendingGrants``), which is safe
+    ///   only because the deduplication below makes a second fold a no-op.
     /// * ``InboxEvent/Kind/bypassAttempt`` — a "Not now" tap. The outcome the
     ///   product exists to produce, and the counter the stats screen will show
     ///   (docs/04-product-spec.md V2-5). v1 `GateState` has nowhere to store the
@@ -1212,11 +1259,14 @@ public extension Reconciler {
     /// recorded on the grant the tap eventually produced.
     ///
     /// That is exact rather than approximate, and it needs no ring of consumed
-    /// ids in `GateState`. The window it has to cover is
-    /// ``InterventionRequest/maxAge`` — fifteen minutes — because a redelivery
-    /// older than that is refused as stale before it can matter; and a grant
-    /// issued fifteen minutes ago is still inside ``Grant/terminalRetention``,
-    /// so ``GrantEngine/compacted(_:now:)`` has not dropped the record the test
+    /// ids in `GateState`. The window it has to cover is however long the record
+    /// stays actionable: ``InterventionRequest/maxAge`` — fifteen minutes — for
+    /// a ``InboxEvent/Kind/grantRequest``, and the granted duration for a
+    /// ``InboxEvent/Kind/grantIssued`` (see the `.grantIssued` arm below for why
+    /// the two differ). A redelivery older than its window is refused as stale
+    /// before it can matter. Either way the grant is still inside
+    /// ``Grant/terminalRetention`` — seven days — so
+    /// ``GrantEngine/compacted(_:now:)`` has not dropped the record the test
     /// looks for. Token bytes are stripped from terminal grants, but
     /// ``Grant/requestID`` is not one of them.
     ///
@@ -1267,14 +1317,39 @@ public extension Reconciler {
                 // for this id, so the grant must adopt it — minting a fresh UUID
                 // here would orphan that timer and make MonitorPlan.diff stop it
                 // and start another (docs/05-architecture.md, activity budget).
+                let duration = GrantEngine.requestedDuration(in: event)
+
+                // `.grantIssued` does NOT get `InterventionRequest.maxAge`.
+                //
+                // That fifteen-minute window is a security property of the
+                // `.grantRequest` path, where the record is a *pointer* the app
+                // must not honour late — an hour-old deep link must not still
+                // convert into access. A `.grantIssued` record is the opposite:
+                // the iOS 26.4+ submenu already granted it at the shield and
+                // already armed the expiry timer, so folding it is bookkeeping
+                // over a decision that has been enforced since the tap. Judging
+                // it by the request window would deny "1 hour" as `.stale` after
+                // fifteen minutes while the timer it describes still fires
+                // forty-five minutes later — the ledger disagreeing with the
+                // device (docs/04-product-spec.md V2-1).
+                //
+                // The honest window is the life of the grant itself, floored at
+                // the request window so a duration-less record behaves as before.
+                // Past it the grant would have expired anyway, so `.stale` is
+                // then the correct answer. Dedup is unaffected: `isRedelivery`
+                // matches on `Grant/requestID`, retained for
+                // `Grant.terminalRetention` (7 days).
+                let issuedMaxAge = max(InterventionRequest.maxAge, duration ?? 0)
+
                 let issuance = GrantEngine.issue(
                     for: request,
                     in: working,
                     now: now,
                     calendar: calendar,
                     isAuthorized: isAuthorized,
-                    duration: GrantEngine.requestedDuration(in: event),
-                    grantID: request.id
+                    duration: duration,
+                    grantID: request.id,
+                    maxAge: issuedMaxAge
                 )
                 working = issuance.state
                 if let grant = issuance.grant { issued.append(grant) }
@@ -1388,7 +1463,12 @@ public extension Reconciler {
     /// 1. Re-read `GateState` from the App Group and migrate it. **Never trust
     ///    in-memory state** — the monitor is always a cold start, and the app
     ///    may have been suspended across a shield tap that wrote to `inbox/`.
-    /// 2. Drain `inbox/` and fold it in (app only; draining deletes).
+    /// 2. Drain `inbox/` and fold it in — app only, and only when this pass may
+    ///    persist what it folds in, because draining deletes. A pass that may not
+    ///    drain but may enforce reads the pending `.grantIssued` records instead
+    ///    and folds them for this pass only
+    ///    (``ReconcileOptions/foldsPendingGrants``), which is how a shield-submenu
+    ///    grant reaches the monitor before the app has seen it.
     /// 3. Expire grants and release ripe changes by absolute timestamp.
     /// 4. **Persist**, before touching enforcement. A crash after this point
     ///    costs a redundant recomputation; a crash *before* a persist that came
@@ -1484,10 +1564,19 @@ public extension Reconciler {
         // ── 2. Drain the inbox ──────────────────────────────────────────────
         var inboxSummary = ReconcileReport.InboxSummary.empty
         let inboxStore = inbox ?? (try? InboxStore())
+        // Draining deletes. Whatever it folds into `state` is durable only once
+        // step 4 writes it, so hold the events for step 4 to put back.
+        var drainedEvents: [InboxEvent] = []
 
-        if options.drainsInbox, let inboxStore {
+        // ``ReconcileRole/drainsInbox``: a pass that cannot persist what it
+        // drained must not drain. `writesState` is the role's half of that;
+        // `isFromFuture` is this pass's — a state file from a newer build refuses
+        // every write for as long as it is there, so draining under one would
+        // destroy the records permanently rather than for a single pass.
+        if options.drainsInbox, mayPersist, let inboxStore {
             do {
                 let drain = try inboxStore.drainDetailed(limit: options.maxInboxEvents)
+                drainedEvents = drain.events
                 let folded = fold(
                     drain.events,
                     into: state,
@@ -1520,6 +1609,56 @@ public extension Reconciler {
                     stage: .inboxDrain,
                     message: String(describing: error)
                 ))
+            }
+        } else if options.drainsInbox, !mayPersist {
+            // `inboxSummary.deferred` is deliberately left at zero. It is what
+            // ``ReconcileReport/InboxSummary/hasMore`` reports, and the app
+            // re-reconciles while that is true — which a pass that will not drain
+            // at all would do for nothing, every activation.
+            reconcileLog.notice("not draining inbox: this pass may not persist what it would fold in")
+        } else if options.foldsPendingGrants, let inboxStore {
+            // ``ReconcileOptions/foldsPendingGrants``: the monitor's pass, woken
+            // by the one-shot `GateShieldAction` armed for a submenu grant. `peek`
+            // reads without deleting, so the app still drains these records and
+            // the ledger is still decremented in exactly one place.
+            //
+            // Only `.grantIssued`. A `.grantRequest` has not been granted — the
+            // user still has to complete the intervention screen — and folding it
+            // here would lift a shield nobody paid for. `.bypassAttempt` is
+            // already resolved, `.tokenExpiry` would move a timestamp this pass
+            // cannot persist, and `.breadcrumb` is this process's own noise.
+            //
+            // Filtered by `kind:` rather than after the read, and that is
+            // load-bearing: the monitor writes two breadcrumbs per callback into
+            // this same directory, so an unfiltered peek truncated at
+            // `maxInboxEvents` could miss the grant record entirely once a
+            // backlog built up. It also means no breadcrumb is ever decoded here.
+            let pending = (try? inboxStore.peek(
+                kind: .grantIssued,
+                limit: options.maxInboxEvents
+            )) ?? []
+            if !pending.isEmpty {
+                let folded = fold(
+                    pending,
+                    into: state,
+                    now: now,
+                    calendar: options.calendar,
+                    isAuthorized: options.isAuthorized
+                )
+                state = folded.state
+                // `consumed` stays zero: nothing was consumed. What this pass can
+                // honestly report is what it folded and what came of it.
+                inboxSummary = ReconcileReport.InboxSummary(
+                    counts: folded.counts,
+                    requests: folded.requests,
+                    issued: folded.issued,
+                    denials: folded.denials,
+                    duplicates: folded.duplicates
+                )
+                reconcileLog.notice("""
+                    folded \(pending.count, privacy: .public) pending grant record(s) \
+                    read-only: \(folded.issued.count, privacy: .public) issued
+                    """)
             }
         }
 
@@ -1561,6 +1700,23 @@ public extension Reconciler {
                     stage: .statePersist,
                     message: String(describing: error)
                 ))
+                // The drain already deleted these files, and the only record of
+                // what they carried was the state that just failed to write. Put
+                // the two kinds that live nowhere else back, under their original
+                // ids — ``InboxEvent/fileName`` is derived from the id, so this
+                // rewrites the file that was deleted rather than adding another,
+                // and `fold`'s redelivery test drops the event again if a later
+                // pass finds the grant already in state.
+                //
+                // `.grantRequest` and `.bypassAttempt` are deliberately not
+                // restored: `fold` never persists them, and this same pass already
+                // handed them to the caller in ``ReconcileReport/inbox``.
+                if let inboxStore {
+                    for event in drainedEvents
+                    where event.kind == .grantIssued || event.kind == .tokenExpiry {
+                        inboxStore.appendBestEffort(event)
+                    }
+                }
             }
         }
 

@@ -316,6 +316,13 @@ struct HomeScreen: View {
                     Label("Debug", systemImage: "ladybug")
                 }
                 #endif
+                // Guideline 5.1.1(i): reachable inside the app, without an
+                // account. This is the half that persists — `OnboardingScreen`
+                // carries the other one, and that screen is never shown again
+                // once `needsOnboarding` goes false (Docs/REVIEW-NOTES.md §5).
+                Link(destination: GateLinks.privacyPolicy) {
+                    Label("Privacy policy", systemImage: "hand.raised")
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .accessibilityLabel("More")
@@ -555,7 +562,7 @@ struct LockCostNote: View {
             return LockCostNote.refusalText(refusal)
         }
         guard assessment.goesThroughLock else {
-            return "Applies immediately. Tightening is always free."
+            return "Applies immediately. This tightening is free."
         }
         // **`hasCountdown`, not `cost > 0`.** `Assessment.cost` is the full
         // `lock.delay` for every queued mutation, including under a
@@ -604,6 +611,10 @@ struct LockCostNote: View {
         case .lockPasswordChangeUnavailable:
             "A partner passphrase can only be set while the Lock has never been used. "
                 + "Clearing the existing one goes through the Lock first."
+        case .lockKindNeedsPassphrase:
+            "There is no partner passphrase on file, so a passphrase-only Lock would have "
+                + "no way to release anything — and a passphrase can only be set while the "
+                + "Lock has never been used."
         case .notRepresentable:
             "Gate cannot queue that change, so it will not apply it either."
         }

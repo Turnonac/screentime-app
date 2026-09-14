@@ -49,9 +49,16 @@
 //  Reads `state.plist` and `selections.plist`; writes `ManagedSettingsStore`s,
 //  the daemon's activity list, `armed.plist`, `monitor-marks.plist` (below), and
 //  appends breadcrumbs to `inbox/`. It **never** writes `state.plist`,
-//  `shield.plist` or `selections.plist`, and never drains `inbox/` — that is the
-//  app's single-writer discipline (docs/05-architecture.md), and it is enforced
-//  for us by `ReconcileRole.monitor`, not by care here.
+//  `shield.plist` or `selections.plist`, and never *drains* `inbox/` — that is
+//  the app's single-writer discipline (docs/05-architecture.md), and it is
+//  enforced for us by `ReconcileRole.monitor`, not by care here.
+//
+//  It does *read* `inbox/` without deleting: `ReconcileOptions.foldsPendingGrants`
+//  is on for this role, so a `.grantIssued` record written by `GateShieldAction`
+//  is folded into this pass's working state and the shield-submenu grant lifts
+//  here rather than waiting for the app's next foreground. The record stays on
+//  disk for the app to drain, and nothing this pass folds is persisted — which
+//  is the same bargain every other deadline in this process makes.
 //
 //  Any state change this pass computes — a grant that expired, a loosening whose
 //  deadline ripened — is applied to *enforcement* immediately and re-derived
@@ -302,10 +309,18 @@ final class GateActivityMonitor: DeviceActivityMonitor {
             // stop maintaining shields the daemon is still honouring. The app
             // checks the real status on every foreground and routes to recovery
             // (docs/04-product-spec.md V1-9).
+            //
+            // `maxInboxEvents` is the one narrowing. `ReconcileRole.monitor`
+            // leaves `foldsPendingGrants` on, so this pass *reads* the pending
+            // `.grantIssued` records — that is what lets a shield-submenu grant
+            // lift here instead of waiting for the app — and reading them under a
+            // 6 MB jetsam ceiling (docs/03-hard-constraints.md #31) has to be
+            // bounded. Nothing is deleted either way.
             let options = ReconcileOptions(
                 role: .monitor,
                 trigger: trigger,
-                calendar: .current
+                calendar: .current,
+                maxInboxEvents: 64
             )
 
             // Coordinated, as the app's writer is. `FileStateStore.save` logs a

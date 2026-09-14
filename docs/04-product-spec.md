@@ -59,7 +59,7 @@ Per rule: a repeating daily window, optionally weekday-scoped.
 
 ### V1-6 · The shield
 `ShieldConfiguration` built from a config blob the app pre-writes to the App Group:
-- `backgroundBlurStyle: .systemUltraThinMaterialDark`, `backgroundColor`, a bundled `icon` `UIImage`.
+- `backgroundBlurStyle: .systemUltraThinMaterialDark`, `backgroundColor`, and optionally a bundled `icon` `UIImage`. **v1 ships no icon**: there is no asset catalog in the repo, so `GateTheme.Shield.iconAssetName` is `nil` and the template falls back to the system icon. Adding one is a drop-in — see the restore note on that constant — but it is a product decision, not a code gap.
 - `title` = the rule's name. `subtitle` = a *static* line of user-written copy ("You said you'd read instead."). **Never a countdown** — configurations are cached/recycled and will render stale (FB14237883).
 - `primaryButtonLabel` = "Let me in" → `.openParentalControlsApp` (26.5+) / notification fallback.
 - `secondaryButtonLabel` = "Not now" → `.close`.

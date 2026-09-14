@@ -956,9 +956,9 @@ public extension GrantEngine {
         let resolution: InterventionRequest.Resolution?
         switch event.kind {
         case .grantRequest, .grantIssued:
-            // Still open. A `grantIssued` record (V2-1, never written by v1) is
-            // re-issued through the same path as everything else, so the ledger
-            // is decremented in exactly one place.
+            // Still open. A `grantIssued` record (V2-1, written by the shield
+            // submenu on iOS 26.4+) is re-issued through the same path as
+            // everything else, so the ledger is decremented in exactly one place.
             resolution = nil
         case .bypassAttempt:
             // Already over: the user pressed "Not now", which is the outcome the

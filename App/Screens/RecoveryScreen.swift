@@ -40,10 +40,12 @@ struct RecoveryScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selection = FamilyActivitySelection()
+    @State private var seededSelection: FamilyActivitySelection?
     @State private var activeRuleID: UUID?
     @State private var isPickerPresented = false
     @State private var refreshNotes: [String] = []
     @State private var repaired: Set<UUID> = []
+    @State private var repairFailure: String?
 
     var body: some View {
         NavigationStack {
@@ -78,6 +80,18 @@ struct RecoveryScreen: View {
             )
             .onChange(of: selection) { _, newValue in
                 commit(newValue)
+            }
+            .alert(
+                "That rule was not repaired",
+                isPresented: Binding(
+                    get: { repairFailure != nil },
+                    set: { if !$0 { repairFailure = nil } }
+                ),
+                presenting: repairFailure
+            ) { _ in
+                Button("OK", role: .cancel) { repairFailure = nil }
+            } message: { detail in
+                Text(detail)
             }
         }
     }
@@ -204,7 +218,12 @@ struct RecoveryScreen: View {
 
     /// Seeds the picker with **what survived**, after asking iOS to re-issue
     /// whatever it can.
+    ///
+    /// Seeding is not a repair, so the seed is recorded in `seededSelection`:
+    /// assigning it to `selection` fires the same `.onChange` a real pick does,
+    /// and `commit(_:)` has to be able to tell the two apart.
     private func begin(_ rule: Rule) {
+        repairFailure = nil
         activeRuleID = rule.id
 
         var seed = model.currentSelection(forRuleID: rule.id) ?? FamilyActivitySelection()
@@ -213,15 +232,37 @@ struct RecoveryScreen: View {
         // opens with whatever is left, because re-picking is the remedy that
         // works on every version.
         refreshNotes = model.refreshTokens(in: &seed)
+        seededSelection = seed
         selection = seed
         isPickerPresented = true
     }
 
     /// The picker closed. Anything the user ticked becomes the rule's selection
-    /// immediately.
+    /// immediately — unless the kernel refuses it, in which case nothing was
+    /// written and the rule stays flagged, with a reason.
     private func commit(_ newValue: FamilyActivitySelection) {
+        // The seed `begin(_:)` assigned fires this observer before the picker is
+        // even on screen. Committing that echo would mark the rule "Re-picked"
+        // for a selection the user never made, and clear `activeRuleID` out from
+        // under the pick they are about to make.
+        guard newValue != seededSelection else { return }
         guard let ruleID = activeRuleID else { return }
-        guard model.reselect(ruleID: ruleID, selection: newValue) != nil else { return }
+        guard let outcome = model.reselect(ruleID: ruleID, selection: newValue) else {
+            repairFailure = "Gate could not read that selection back from iOS. "
+                + "Try re-picking that rule."
+            return
+        }
+        if let refusal = outcome.refusal {
+            // A refusal writes nothing, so the rule still shields whatever it
+            // shielded before — nothing — and must stay flagged. The reachable
+            // case is the silent 50-per-collection cap
+            // (docs/03-hard-constraints.md #34), which is the very failure this
+            // screen exists to undo.
+            repairFailure = LockCostNote.refusalText(refusal)
+            repaired.remove(ruleID)
+            activeRuleID = nil
+            return
+        }
         repaired.insert(ruleID)
         activeRuleID = nil
     }

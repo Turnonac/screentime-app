@@ -11,8 +11,8 @@ That asymmetry is the whole product; everything else exists to make it usable.
 
 ## Status — read this first
 
-**Scaffold and logic layer written. Nothing here has ever been compiled, run, or
-validated on a device.**
+**The complete v1 source tree is present. Nothing here has ever been compiled,
+run, or validated on a device.**
 
 This repository was authored on Linux, where no Xcode, no Swift compiler and no
 iOS SDK exist. The Swift here is written against the exact symbol list in
@@ -26,15 +26,17 @@ iOS SDK exist. The Swift here is written against the exact symbol list in
 | 2 — On-device proof loop + the go/no-go device gate | **Not run.** `Docs/DEVICE-TEST-MATRIX.md` is an unfilled template. |
 | 3 — `Kernel/` (model, store, ratchet, scheduling, enforcement, reconciler) | Written |
 | 4 — The four extensions | Written |
-| 5 — `App/` (SwiftUI screens, `AppModel`, reconcile-on-foreground) | **Not written.** The directory does not exist. |
-| 6 — Personally useful dev-signed build | Not reached |
-| 7 — App Store readiness (privacy manifests, CI, review notes) | CI + review notes written; privacy manifests not written |
+| 5 — `App/` (SwiftUI screens, `AppModel`, reconcile-on-foreground) | Written — `GateApp`, `AppModel`, seven screens, `Debug/`. Never compiled. |
+| 6 — Personally useful dev-signed build | **Not reached.** Needs a Mac, Xcode 26.5+ and a physical device — none of which have touched this tree. |
+| 7 — App Store readiness (privacy manifests, CI, review notes) | CI, review notes and all five privacy manifests written; none validated by a real archive |
 
 Concretely, that means:
 
-- **The CI build job fails today, on purpose.** `App/GateApp.swift` does not
-  exist, so the `Gate` target has no sources and cannot link. CI reports that as
-  a named preflight failure rather than an undefined-`_main` linker error.
+- **CI has never been observed running on this tree.** The preflight step that
+  guarded against an empty `Gate` target (`App/GateApp.swift` missing) now
+  passes, so the workflow proceeds to the compile job — but no run of that job
+  has been seen, and the first one may well fail. A green check has never
+  existed here.
 - **Two architectural decisions are still open**, and only a physical device can
   close them — no amount of further reading will. Both are in
   `Docs/DEVICE-TEST-MATRIX.md`: whether `ShieldActionResponse.openParentalControlsApp`
@@ -154,8 +156,9 @@ make project
 open Gate.xcodeproj
 ```
 
-Step 3 does not work yet: the `Gate` app target has no sources until build-plan
-phase 2.1 adds `App/GateApp.swift`. Steps 1 and 2 do work, as does `make verify`.
+Step 3 has never been performed. The `Gate` target now has sources, but no part
+of this tree has been through a Swift compiler, so expect to fix build errors
+before the app runs. Steps 1 and 2 are Linux-safe, as is `make verify`.
 See [Status](#status--read-this-first).
 
 **The Simulator is useless for this project and always will be.** There is no
@@ -219,15 +222,23 @@ Extensions/
   ShieldAction/                Appends to inbox/, then .openParentalControlsApp or .close
   Report/                      ExtensionKit. Renders locally; nothing it computes can escape.
 
-Tests/GateKernelTests/         Kernel unit tests. `make test` runs them once the
-                               SwiftPM manifest (Tests/Package.swift, phase 3.11)
-                               lands. No Xcode project, no device.
+App/                           The Gate app target. SwiftUI, never compiled.
+  GateApp.swift                @main, scene-phase hook, notification delegate, gate:// deep link
+  AppModel.swift               the single @MainActor observable; owns activate(trigger:)
+  GateLinks.swift              the privacy-policy URL — SET IT before submitting (5.1.1(i))
+  Screens/                     Home, RuleEditor, LockSettings, Intervention, Recovery, Onboarding, Stats
+  Debug/                       DebugScreen — dev-signed builds only
+
+Package.swift                  root SwiftPM manifest — `swift test` only; never a
+                               dependency of the generated Xcode project
+Tests/GateKernelTests/         Kernel unit tests, run by `make test` (which cd's to
+                               Tests/ and finds the root manifest). Never executed.
 
 docs/                          the research dossier this was built from (lowercase)
 Docs/                          the operational checklists you fill in (capitalised)
 
-App/                           NOT YET WRITTEN — build plan phases 2 and 5
-Config/Privacy/                NOT YET WRITTEN — build plan phase 7.1 (five .xcprivacy files)
+Config/Privacy/App/            PrivacyInfo.xcprivacy for the app bundle
+Config/Privacy/Extension/      PrivacyInfo.xcprivacy, shared by all four .appex bundles
 Widgets/                       v2
 ```
 

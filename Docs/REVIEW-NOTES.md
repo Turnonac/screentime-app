@@ -19,15 +19,27 @@ purpose: the user selects their own apps and websites and the app shields them
 on a schedule the user sets. It uses FamilyControlsMember.individual, so no
 iCloud account, no Family Sharing group and no second device are needed.
 
-To test (~90 seconds, one device, no login):
-1) Launch → "Get Started" → tap Continue on the iOS Screen Time alert →
+To test (~2 minutes, one device, no login):
+1) Launch → "Continue" → tap Continue on the iOS Screen Time alert →
    authenticate with Face ID / Touch ID.
-2) "Choose apps to block" → the system picker appears → select 1–2 installed
-   apps → Done. (By design the app never learns which apps you picked — iOS
-   returns opaque tokens.)
-3) "Start block now."
-4) Press Home and tap a selected app — our shield appears.
-5) Tap "Not now," reopen the app, tap "End block."
+2) "Make my first rule" (the Screen Time passcode and partner passphrase on
+   that screen are both optional — skip them).
+3) "New rule" → type any name → "Choose apps and sites" → the system picker
+   appears → select 1–2 installed apps → Done → "Save". (By design the app
+   never learns which apps you picked — iOS returns opaque tokens.) The rule is
+   on and enforcing as soon as you save it; there is no separate start button.
+4) Press Home and tap a selected app — our shield appears, with "Let me in" and
+   "Not now".
+5) Tap "Not now" — you are returned to the Home screen.
+6) To end the block: reopen the app and tap "Remove everything" under "If
+   something looks wrong", then confirm. This clears every shield immediately.
+   Press Home and tap the same app — it opens normally.
+
+One thing to expect, because it is the product: switching an individual rule
+off is a *loosening* and waits out the user's delay (15 minutes by default) —
+that wait is the entire point of the app. "Remove everything" is deliberately
+exempt from that wait so a user is never trapped behind shields, which is why
+it is the fastest path for this test.
 
 Privacy: all Screen Time data stays on device. The DeviceActivityReport
 extension is sandboxed by Apple and cannot pass data back to us; selections are
@@ -79,15 +91,16 @@ revoke Gate entirely in Settings → Screen Time. We say so in onboarding.
 
 Apple explicitly sanctions this: *"If features require an environment that is hard to replicate… be prepared to provide a demo video."* **The shield only renders with a live entitlement.** Do not make the reviewer discover that; if their build or account state is off, an unexplained blank screen becomes a rejection.
 
-Record, on device, in one unbroken take, roughly 60–90 seconds:
+Record, on device, in one unbroken take, roughly 90–120 seconds:
 
 1. Cold launch → onboarding copy visible, including the honest limits line.
-2. "Get Started" → the iOS Screen Time alert → biometric authentication.
-3. "Choose apps to block" → the system `FamilyActivityPicker` → select two apps → Done.
-4. "Start block now."
-5. Press Home → tap a shielded app → **the Gate shield renders**.
-6. Tap "Not now" → returns to Home.
-7. Reopen Gate → "End block" → press Home → tap the same app → it opens normally.
+2. "Continue" → the iOS Screen Time alert → biometric authentication.
+3. "Make my first rule" → "New rule" → name it → "Choose apps and sites" →
+   the system `FamilyActivityPicker` → select two apps → Done → "Save".
+4. Press Home → tap a shielded app → **the Gate shield renders**.
+5. Tap "Not now" → returns to Home.
+6. Reopen Gate → "Remove everything" → confirm "Remove everything" →
+   press Home → tap the same app → it opens normally.
 
 ---
 
@@ -113,8 +126,10 @@ True for a v1 with no account, no server, no analytics and no crash reporter. Ap
 
 **This answer breaks the moment you add RevenueCat, Crashlytics, or the v2 partner heartbeat** — the nutrition label covers the whole binary including bundled SDKs. Re-answer the questionnaire in the same release that adds any of them.
 
-☐ Five privacy manifests present and validated — the app plus each of the four `.appex` bundles (step 7.1/7.2). Each file must be named `PrivacyInfo.xcprivacy` **inside its bundle**; a source file named `App-PrivacyInfo.xcprivacy` copies in under that name and is silently ignored.
+☑ Five privacy manifests present (`Config/Privacy/App/` for the app, `Config/Privacy/Extension/` copied into each of the four `.appex` bundles; wired into every target's Copy Bundle Resources phase in `project.yml`). ☐ Still to do: validate — the app plus each of the four `.appex` bundles (step 7.1/7.2). Each file must be named `PrivacyInfo.xcprivacy` **inside its bundle**; a source file named `App-PrivacyInfo.xcprivacy` copies in under that name and is silently ignored.
 ☐ `NSPrivacyAccessedAPICategoryUserDefaults` declared with reason **`1C8F.1`** (the App-Group-shared reason) — **not** `CA92.1`.
+☐ `NSPrivacyAccessedAPICategoryFileTimestamp` declared with reason **`C617.1`** (files inside the app container, App Group container, or CloudKit container). Gate really does hit it: `ShieldCopyCache.stamp(of:)` in `Extensions/ShieldConfiguration/GateShieldConfiguration.swift` reads `.contentModificationDateKey` on `shield.plist` on every shield presentation, and `AppGroupContainer.describe(_:)` in `Kernel/Store/AppGroupContainer.swift` does the same for the debug screen. `GateKernel` is embedded once in `Gate.app/Frameworks` and linked by all four `.appex` bundles, so declare it in all five manifests (this is what `AppGroupContainer.swift`'s own note above `diagnosticDescription()` says). If either call site is ever deleted, delete the declaration with it.
+☐ `NSPrivacyAccessedAPICategorySystemBootTime` **not** declared — `LockClock` deliberately avoids `ProcessInfo.systemUptime` and nothing in the tree uses a `mach_absolute_time`-family clock, so `35F9.1` would be a category the binary does not hit.
 ☐ No `NSPrivacyTrackingDomains` key anywhere: its presence alongside `NSPrivacyTracking = false` is invalid.
 ☐ No category declared that the binary does not actually hit — an incorrect declaration is itself rejectable (ITMS-91054 / ITMS-91055).
 ☐ Organizer → **Generate Privacy Report** produces the expected report.
@@ -124,7 +139,7 @@ True for a v1 with no account, no server, no analytics and no crash reporter. Ap
 ## 5 · Privacy policy — required in two places
 
 ☐ Live at a public URL, entered in the App Store Connect metadata field.
-☐ Linked **inside the app**, reachable **without an account** (5.1.1(i)). Gate has no accounts, so this is a plain link on the settings screen.
+☐ Linked **inside the app**, reachable **without an account** (5.1.1(i)). Gate has no accounts and no settings screen, so the link lives in two places: the overflow menu on the home screen (`App/Screens/HomeScreen.swift`, the `toolbar` menu) and the footnote at the end of onboarding (`App/Screens/OnboardingScreen.swift`) — onboarding alone is not enough, because that screen is never shown again once `needsOnboarding` goes false. Both read the URL from `GateLinks.privacyPolicy` in `App/GateLinks.swift`; set it there before submitting.
 
 Include the sentence reviewers look for:
 

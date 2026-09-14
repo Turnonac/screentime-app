@@ -71,7 +71,24 @@ settings:
       ONLY_ACTIVE_ARCH: YES
       ENABLE_TESTABILITY: YES
       STRIP_INSTALLED_PRODUCT: NO
+      # Stated explicitly rather than left to Xcode's built-in default. No
+      # XcodeGen setting preset carries SWIFT_OPTIMIZATION_LEVEL at all
+      # (checked: it appears in none of SettingPresets/*.yml), so with the key
+      # absent here Debug would inherit an unwritten platform default. One line
+      # is cheaper than that assumption.
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
     Release:
+      # Lives here, next to Debug's -Onone, because this is the one setting that
+      # has to differ per configuration. A single value in Config/Build.xcconfig
+      # would apply to BOTH configurations, since that file has no way to say
+      # "Debug only". These `settings:` entries are merged in after XcodeGen's
+      # deletion pass (SettingsBuilder.getProjectBuildSettings ->
+      # removeConfigFileSettings, then `+= getBuildSettings`), so they are the
+      # level that can say something different per configuration.
+      # `-Osize` and `wholemodule` are independent and combine fine; the
+      # DeviceActivityMonitor extension's 6 MB jetsam ceiling
+      # (docs/03-hard-constraints.md #31) is why size wins over speed here.
+      SWIFT_OPTIMIZATION_LEVEL: -Osize
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: YES
       ENABLE_NS_ASSERTIONS: NO
@@ -170,18 +187,16 @@ targets:
       - path: App
         optional: true
 
-      # Phase 7.1 adds the privacy manifests — one per bundle, five total.
-      # They are NOT wired up yet, on purpose: declaring a required-reason API
-      # category you do not actually hit is itself rejectable (ITMS-91054/91055),
-      # and the app does not touch App Group UserDefaults until Phase 3.2.
+      # Privacy manifest (docs/06-build-plan.md step 7.1). One per bundle, five
+      # total — this one plus the four extensions, which share
+      # Config/Privacy/Extension/PrivacyInfo.xcprivacy.
       #
-      # When you add them, the file must be named PrivacyInfo.xcprivacy INSIDE
-      # the bundle — a source file called "App-PrivacyInfo.xcprivacy" copies in
-      # under that name and is silently ignored. Give each target its own
-      # directory and let the basename be PrivacyInfo.xcprivacy:
-      #
-      #   - path: Config/Privacy/App/PrivacyInfo.xcprivacy
-      #     buildPhase: resources
+      # The basename matters: the file must be named PrivacyInfo.xcprivacy
+      # INSIDE the bundle. A source file called "App-PrivacyInfo.xcprivacy"
+      # copies in under that name and is silently ignored, which is why each
+      # manifest gets its own directory rather than a distinguishing prefix.
+      - path: Config/Privacy/App/PrivacyInfo.xcprivacy
+        buildPhase: resources
 
     info:
       path: Config/Gate-Info.plist
@@ -387,6 +402,12 @@ targets:
       - path: Extensions/ActivityMonitor
         optional: true
 
+      # Shared with the other three extensions. Same file, copied into each
+      # bundle as PrivacyInfo.xcprivacy — see the Gate target for why the
+      # basename cannot carry a target prefix.
+      - path: Config/Privacy/Extension/PrivacyInfo.xcprivacy
+        buildPhase: resources
+
     info:
       path: Config/ActivityMonitor-Info.plist
       properties:
@@ -431,6 +452,12 @@ targets:
     sources:
       - path: Extensions/ShieldConfiguration
         optional: true
+
+      # Shared with the other three extensions. Same file, copied into each
+      # bundle as PrivacyInfo.xcprivacy — see the Gate target for why the
+      # basename cannot carry a target prefix.
+      - path: Config/Privacy/Extension/PrivacyInfo.xcprivacy
+        buildPhase: resources
 
     info:
       path: Config/ShieldConfiguration-Info.plist
@@ -478,6 +505,12 @@ targets:
     sources:
       - path: Extensions/ShieldAction
         optional: true
+
+      # Shared with the other three extensions. Same file, copied into each
+      # bundle as PrivacyInfo.xcprivacy — see the Gate target for why the
+      # basename cannot carry a target prefix.
+      - path: Config/Privacy/Extension/PrivacyInfo.xcprivacy
+        buildPhase: resources
 
     info:
       path: Config/ShieldAction-Info.plist
@@ -543,6 +576,12 @@ targets:
     sources:
       - path: Extensions/Report
         optional: true
+
+      # Shared with the other three extensions. Same file, copied into each
+      # bundle as PrivacyInfo.xcprivacy — see the Gate target for why the
+      # basename cannot carry a target prefix.
+      - path: Config/Privacy/Extension/PrivacyInfo.xcprivacy
+        buildPhase: resources
 
     info:
       path: Config/Report-Info.plist

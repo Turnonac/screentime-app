@@ -354,10 +354,20 @@ public enum GateTheme {
         /// V1-6's default.
         public static let blurStyle: ShieldBlurStyle = .systemUltraThinMaterialDark
 
-        /// A name in `Extensions/ShieldConfiguration`'s own asset catalog — the
-        /// image bytes never travel through the App Group (``ShieldCopy``
-        /// stores the name only).
-        public static let iconAssetName = "ShieldIcon"
+        /// The asset name the shield extension looks up for
+        /// `ShieldConfiguration.icon`, or `nil` for the system default icon.
+        ///
+        /// `nil` today: no asset catalog ships in
+        /// `Extensions/ShieldConfiguration`, and
+        /// `UIImage(named:in:compatibleWith:)` against a bundle with no catalog
+        /// returns `nil` anyway — naming a missing asset only makes the plist
+        /// claim something the extension cannot honour. To give the shield its
+        /// own icon, add `Extensions/ShieldConfiguration/ShieldAssets.xcassets`
+        /// containing a `ShieldIcon` imageset (XcodeGen picks it up from the
+        /// target's existing `sources` glob — project.yml needs no change) and
+        /// set this back to `"ShieldIcon"`. The image bytes never travel through
+        /// the App Group; ``ShieldCopy`` stores the name only.
+        public static let iconAssetName: String? = nil
 
         /// V1-6's button copy. "Let me in" routes to `.openParentalControlsApp`
         /// on iOS 26.5+ and to a notification deep link below it;

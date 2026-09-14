@@ -533,7 +533,11 @@ final class AppModel {
 
         // 3. Make sure `shield.plist` exists and says the right thing before the
         //    reconcile indexes it: `Reconciler` only refreshes an index that is
-        //    already there, and inventing shield copy is not its job.
+        //    already there, and inventing shield copy is not its job. It stays
+        //    ahead of step 4 for that reason; on a cold launch, where step 4 is
+        //    what loads `state` in the first place, `publishShieldCopy` declines
+        //    to write at all and the file keeps the copy the last mutation
+        //    published — which is the current copy.
         publishShieldCopy(now: now)
 
         // 4. Reconcile — which also drains `inbox/` and computes the backstops
@@ -1085,7 +1089,34 @@ final class AppModel {
     /// The Keychain copy survives app deletion; the App Group container does not.
     /// That single fact is what makes delete-and-reinstall not reset the delay.
     private func resolveLockClock(now: Date = Date()) {
-        let mirror = state.lockClock?.deadline(revision: keychainRevision)
+        guard let store else { return }
+
+        // The PERSISTED state, never `self.state`: this runs at step 2 of
+        // `activate`, and the only thing that loads `state.plist` is the
+        // reconcile at step 4. On a cold launch `self.state` is still
+        // `GateState.initial`, so reading the mirror from it reports "no
+        // mirror", resolves to `.keychainWins`, and then persists that empty
+        // state over every rule the user has.
+        let stored: GateState
+        do {
+            stored = try store.load()
+        } catch StateStoreError.stateMissing {
+            // A genuine first run or a reinstall: there is no file to protect,
+            // and mirroring the surviving Keychain deadline into a fresh state
+            // is exactly the delete-and-reinstall path (V1-3).
+            stored = GateState.initial(now: now)
+        } catch {
+            // The file exists and will not decode. Writing anything here would
+            // destroy it; step 4 raises `.stateUnreadable` and the user gets the
+            // recovery path instead.
+            appLog.error("""
+                lock clock: state.plist exists but will not decode, not resolving: \
+                \(String(describing: error), privacy: .public)
+                """)
+            return
+        }
+
+        let mirror = stored.lockClock?.deadline(revision: keychainRevision)
         do {
             let resolution = try lockClock.load(mirror: mirror)
             if let deadline = resolution.deadline {
@@ -1096,8 +1127,13 @@ final class AppModel {
             appLog.notice("""
                 lock clock: \(String(describing: resolution), privacy: .public) — mirroring into state
                 """)
-            var next = state
-            next.lockClock = deadline.record(currentInstallID: state.installID)
+            // Based on `stored`, so the write carries the persisted install's
+            // own `installID`. Stamping the throwaway one a fresh
+            // `GateState.initial` mints would make
+            // `LockClockRecord.isFromPreviousInstall(currentInstallID:)` lie for
+            // any Keychain record that carries no `installID` of its own.
+            var next = stored
+            next.lockClock = deadline.record(currentInstallID: stored.installID)
             persistQuietly(next, now: now)
         } catch LockClockError.unavailableUntilFirstUnlock(let status) {
             // Before first unlock the item is genuinely unreadable. That is NOT
@@ -1162,6 +1198,13 @@ final class AppModel {
     /// app owns titles, subtitles, colors and button labels. Both halves are
     /// preserved here: the existing index is read back and carried forward
     /// untouched, so publishing copy never blinds the extension.
+    ///
+    /// Publishes **only when `state` has actually been loaded**. This is step 3
+    /// of ``activate(trigger:now:)`` and the reconcile at step 4 is what reads
+    /// `state.plist`, so on a cold launch `state` is still `GateState.initial`;
+    /// writing that out would publish a table with zero entries and prune the
+    /// whole index. Reading the file — and therefore hydrating
+    /// ``shieldMessages`` — happens either way.
     func publishShieldCopy(now: Date = Date()) {
         guard store != nil else { return }
 
@@ -1173,6 +1216,14 @@ final class AppModel {
             // Not an error on a first run — the file simply does not exist yet.
             table = ShieldCopyTable(fallback: GateTheme.Shield.fallbackCopy)
         }
+
+        // An empty `state` is only publishable once something has confirmed it
+        // really is empty. `startup.isReady` means a reconcile loaded it; a
+        // non-empty rule list means it came from somewhere real either way.
+        // Neither holds before step 4 of the first `activate`, and the file on
+        // disk is already correct there — every writer of a rule name or a
+        // subtitle republishes as part of the same call.
+        guard startup.isReady || !state.rules.isEmpty else { return }
 
         let entries = state.rules.map { rule -> ShieldCopy in
             let title = rule.name.trimmingCharacters(in: .whitespacesAndNewlines)

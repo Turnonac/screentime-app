@@ -710,6 +710,21 @@ public extension GateState {
         // by hand in a test.
         state.lock.delay = LockPolicy.clampDelay(state.lock.delay)
 
+        // A ``LockKind/password`` Lock with no digest on file is not a strict
+        // Lock, it is an **unreleasable** one: `LockPolicy.verify` answers
+        // `.notConfigured` to every passphrase and `earliestApplyDate` is `nil`,
+        // so no queued loosening ever lands and every route back out is itself a
+        // loosening. `Ratchet` refuses to create it at queue time
+        // (`Refusal.lockKindNeedsPassphrase`) and demotes it again at release
+        // time, so the kernel cannot produce this state — but a hand-edited or
+        // torn `state.plist` can, and nothing else in the app could then repair
+        // it. Same shape and same reasoning as the clamp above: unconditional,
+        // and not reported, because no code path this build owns can produce the
+        // input.
+        if !state.lock.kind.acceptsDelay, state.lock.password == nil {
+            state.lock.kind = .delay
+        }
+
         // ── Grant configuration ──────────────────────────────────────────────
         state.grantPolicy = GrantPolicy(
             dailyLimit: state.grantPolicy.dailyLimit,

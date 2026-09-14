@@ -42,6 +42,15 @@ private let otherChangeID = UUID(uuidString: "DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDD
 
 private let lock = LockPolicy(kind: .delay, delay: 4 * 3600, isRatchetEnabled: true, updatedAt: now)
 
+/// Injected wherever a reconcile is driven from here, so the ledger roll inside
+/// ``Reconciler/advance(_:now:calendar:)`` cannot depend on the host's time zone.
+private let utc: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+    calendar.locale = Locale(identifier: "en_US_POSIX")
+    return calendar
+}()
+
 private func record(
     change: UUID? = changeID,
     ripensIn seconds: TimeInterval? = 4 * 3600,
@@ -310,6 +319,33 @@ struct LockClockResolutionTests {
         #expect(adopted.isFromPreviousInstall(currentInstallID: installB))
         #expect(adopted.pendingChangeID == change.id)
         #expect(adopted.earliestApplyAt == change.earliestApplyAt)
+
+        // ── …and the first reconcile must not undo any of it ──────────────
+        //
+        // This is where the whole feature used to die. The fresh install has no
+        // pending changes — the container is gone — so the mirror projection saw
+        // an empty queue, answered `nil`, and `advance` wrote that back over the
+        // record it had just adopted *and* asked for a Keychain write, which
+        // tombstones the surviving item. Deleting the app cleared the delay in
+        // two steps, and the test above stopped one step short of noticing.
+        let launch = now.addingTimeInterval(60)
+        var fresh = GateState.initial(now: launch, installID: installB)
+        fresh.lock = lock
+        fresh.lockClock = adopted
+
+        let firstPass = Reconciler.advance(fresh, now: launch, calendar: utc)
+        #expect(firstPass.state.lockClock == adopted, "the adopted deadline survives verbatim")
+        #expect(
+            firstPass.effects.mirrorsLockClock == false,
+            "and nothing asks the Keychain to rewrite a record that did not move"
+        )
+
+        // Once it has actually been served, the Lock goes idle and the Keychain
+        // is told — otherwise a satisfied deadline would be immortal.
+        let served = try #require(adopted.earliestApplyAt).addingTimeInterval(1)
+        let laterPass = Reconciler.advance(fresh, now: served, calendar: utc)
+        #expect(laterPass.state.lockClock == nil)
+        #expect(laterPass.effects.mirrorsLockClock)
     }
 
     @Test("The Keychain falling behind is healed from the mirror")

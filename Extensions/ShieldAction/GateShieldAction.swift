@@ -375,7 +375,15 @@ final class GateShieldAction: ShieldActionDelegate {
         // records already sitting in `inbox/` closes that
         // (``GrantEngine/inFlightCount(in:now:maxAge:)``; the double-spend note on
         // ``GrantEngine/Budget``).
-        let inFlight = GrantEngine.inFlightCount(in: (try? inbox.peek()) ?? [], now: now)
+        //
+        // Two kind-filtered peeks rather than one unfiltered read: `peek` cuts at
+        // `limit` in `contentsOfDirectory` order, which is undefined, and the
+        // monitor fills this same directory with breadcrumbs. An unfiltered read
+        // under a backlog could miss the very records this count exists to see —
+        // and an under-count here is the double-spend, not a rounding error.
+        let unresolved = ((try? inbox.peek(kind: .grantRequest)) ?? [])
+            + ((try? inbox.peek(kind: .grantIssued)) ?? [])
+        let inFlight = GrantEngine.inFlightCount(in: unresolved, now: now)
         let budget = GrantEngine.budget(
             ledger: state?.grantLedger ?? GrantLedger(),
             policy: policy,
@@ -438,8 +446,10 @@ final class GateShieldAction: ShieldActionDelegate {
         // — the shield set is not rewritten here (that needs the rule's decoded
         // `FamilyActivitySelection`, which is the app's job), so the lift lands on
         // the next reconcile. The one-shot armed above starts at the beginning of
-        // today, i.e. it is already ongoing, so iOS delivers `intervalDidStart`
-        // almost immediately (docs/02-api-reference.md §7) and the monitor wakes.
+        // today, so iOS delivers `intervalDidStart` almost immediately
+        // (docs/02-api-reference.md §7) and the monitor reconciles;
+        // `ReconcileOptions.foldsPendingGrants` is what lets that pass see this
+        // record before the app has drained it.
         completionHandler(.close)
     }
 

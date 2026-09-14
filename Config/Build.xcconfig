@@ -2,9 +2,23 @@
 // Gate — shared build configuration.
 //
 // Applied at the PROJECT level to every target and every configuration
-// (see `configFiles:` in project.yml). Target-level settings in project.yml
-// override anything set here, so only project-wide invariants belong in
-// this file.
+// (see `configFiles:` in project.yml).
+//
+// PRECEDENCE, because it is not the plain Xcode hierarchy and guessing it wrong
+// has already cost one round trip. XcodeGen does not simply layer its setting
+// presets over this file; before writing a build settings table it DELETES
+// every key that appears in the project xcconfig
+// (`SettingsBuilder.removeConfigFileSettings`, applied to the project table and
+// again to every target table). So:
+//
+//   * A key set here BEATS XcodeGen's `base`/`debug`/`release` presets. That is
+//     what makes `SWIFT_VERSION = 6.0` below actually take effect even though
+//     `SettingPresets/base.yml` carries `SWIFT_VERSION: '5.0'`.
+//   * A key set here LOSES to a `settings:` block in project.yml, project-level
+//     or target-level — those are merged in *after* the deletion pass.
+//
+// So: project-wide invariants belong here, and anything that has to differ
+// per-configuration or per-target belongs in project.yml's `settings:`.
 //
 // NOTE: xcconfig comments are `//` only. `#` introduces a directive
 // (`#include`, `#include?`), never a comment.
@@ -106,9 +120,15 @@ CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES
 
 // The DeviceActivityMonitor extension has a 6 MB hard memory ceiling and is
 // jetsam-killed the moment it is exceeded (docs/03-hard-constraints.md #31).
-// Stripping and `-Osize` keep the shipped binaries small; the Debug
-// configuration overrides the optimization level back to -Onone in project.yml.
-SWIFT_OPTIMIZATION_LEVEL = -Osize
+// Stripping keeps the shipped binaries small.
+//
+// SWIFT_OPTIMIZATION_LEVEL is deliberately NOT set here — not because it would
+// be ignored (see the header: a key set here beats XcodeGen's presets), but
+// because it is the one setting that MUST differ per configuration, and an
+// xcconfig applied to every configuration has no way to say "Debug only". A
+// value here would optimize Debug too. Both values live together in
+// project.yml's `settings: configs:` instead, each stated explicitly:
+// -Onone for Debug, -Osize for Release.
 LLVM_LTO = NO
 STRIP_INSTALLED_PRODUCT = YES
 COPY_PHASE_STRIP = NO

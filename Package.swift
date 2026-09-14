@@ -32,40 +32,36 @@
 //  `.build`, and `make clean` already removes both.
 //
 //  ─────────────────────────────────────────────────────────────────────────────
-//  PREREQUISITE — READ BEFORE RUNNING `make test`
+//  WHERE `make test` RUNS — READ BEFORE FILING A BUILD FAILURE
 //
-//  `Kernel/Identifiers.swift` currently does this, unconditionally:
+//  **macOS: yes. Linux: not yet.**
 //
-//      import Foundation
-//      import ManagedSettings
-//      import DeviceActivity
+//  `Kernel/Identifiers.swift` used to import ManagedSettings and DeviceActivity
+//  unconditionally, which broke this package on every host `swift test` can run
+//  on. That is fixed: both imports and the three SDK extensions below them
+//  (`ManagedSettingsStore.Name`, `DeviceActivityName`,
+//  `DeviceActivityReport.Context`) are now behind `#if canImport(…)`, and the
+//  Screen Time frameworks are iOS / iPadOS / Mac Catalyst only
+//  (docs/02-api-reference.md §1; docs/03-hard-constraints.md #9), so on a native
+//  macOS host every one of those guards is false and the pure layer compiles.
 //
-//  Every other file in `Kernel/` already fences its SDK usage
-//  (`#if canImport(ManagedSettings)`, `#if canImport(DeviceActivity)`,
-//  `#if canImport(CryptoKit)`, `#if canImport(os)`) precisely so that the pure
-//  layer compiles off-device. `Identifiers.swift` is the one that does not — and
-//  it is the file that defines `GateID` and `GateLimits`, which every model type
-//  reads, so it cannot simply be excluded from the target.
+//  What that means for the tests: anything fenced on `canImport(ManagedSettings)`
+//  or `canImport(DeviceActivity)` is NOT compiled here and cannot be tested here.
+//  `Reconciler.reconcile` is the big one — it is the whole of
+//  `#if canImport(ManagedSettings) && canImport(DeviceActivity) && canImport(os)`
+//  — which is why the suites exercise the pure projections it calls
+//  (`Reconciler.advance`, `Reconciler.fold`, `Ratchet`, `GrantEngine`,
+//  `ScheduleBuilder`) rather than the pass itself. Full-pass coverage is a device
+//  item (Docs/DEVICE-TEST-MATRIX.md), not a gap somebody forgot to fill.
 //
-//  The Screen Time frameworks are **iOS / iPadOS / Mac Catalyst only**
-//  (docs/02-api-reference.md §1; docs/03-hard-constraints.md #9: *"macOS is not
-//  available… Target iOS + iPadOS only."*). `canImport(ManagedSettings)` is
-//  therefore false on a native macOS host and on Linux — i.e. on every host
-//  `swift test` can actually run on. Until those two imports and the three SDK
-//  extensions below them (`ManagedSettingsStore.Name`, `DeviceActivityName`,
-//  `DeviceActivityReport.Context`) are wrapped in `#if canImport(…)`, this
-//  package will not build, and the failure will be at `Identifiers.swift` rather
-//  than anywhere in `Tests/`.
-//
-//  That is a one-file, ~6-line change, it costs the shipping build nothing (the
-//  guards are all true on iOS), and it is the last thing standing between this
-//  repo and a green `make test`. It is deliberately NOT made here: this manifest
-//  does not own that file.
-//
-//  Once the guards land, the same target also builds on Linux, because the only
-//  other SDK-bound files — `Kernel/Store/{GateStateStore,InboxStore,LockClock}.swift`
-//  and the `#if canImport(os)` islands that depend on them — are already fenced,
-//  and the test files here fence their own suites to match.
+//  Linux is still blocked, on `os` rather than on Screen Time:
+//  `Kernel/Store/{LockClock,GateStateStore,InboxStore}.swift` import `os` at file
+//  scope (LockClock also imports Security and CryptoKit), and `os` does not exist
+//  off Apple platforms. Fencing those three would need a Logger shim rather than
+//  a `#if` — they log from every code path — so it is a real piece of work and
+//  not the ~6 lines the Identifiers fix was. The Makefile's `test` recipe
+//  describes a Linux toolchain as supported; until that shim exists, read that as
+//  an intention.
 //  ─────────────────────────────────────────────────────────────────────────────
 //
 

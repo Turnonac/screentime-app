@@ -1084,6 +1084,45 @@ struct RatchetRefusalTests {
         #expect(outcome.state.lock.kind == .both)
     }
 
+    @Test("A passphrase-only Lock with no passphrase on file is refused")
+    func passwordOnlyKindNeedsADigest() {
+        // The wedge: `.password` answers `.notConfigured` to every passphrase
+        // and `earliestApplyDate` is `nil`, so nothing would ever release a
+        // queued loosening again — and every route back out is itself a
+        // loosening, so the state would be permanent.
+        let state = makeState()
+        #expect(state.lock.password == nil)
+
+        let assessment = Ratchet.assess(.setLockKind(.password), in: state)
+        #expect(assessment.refusal == .lockKindNeedsPassphrase(.password))
+        #expect(assessment.direction == .loosen)
+        #expect(assessment.rationale == .refused)
+        #expect(assessment.cost == 0)
+
+        // Inert, like every other refusal.
+        let outcome = Ratchet.applying(.setLockKind(.password), to: state, now: now)
+        #expect(outcome.state == state)
+        #expect(outcome.pendingChange == nil)
+    }
+
+    @Test("The passphrase-only refusal is exactly as narrow as it claims to be")
+    func passwordOnlyRefusalIsNarrow() {
+        // With a digest on file there is a release path, so nothing is refused.
+        let armed = makeState(
+            lock: LockPolicy(kind: .both, delay: 900, password: storedPassword(), updatedAt: now)
+        )
+        #expect(Ratchet.assess(.setLockKind(.password), in: armed).refusal == nil)
+
+        // `.both` with no digest is merely redundant: it still ripens on the
+        // clock, which is what `releasePathsFollowTheLock` pins.
+        #expect(Ratchet.assess(.setLockKind(.both), in: makeState()).refusal == nil)
+
+        // A no-op re-selection stays free, so a state already wedged by an older
+        // build does not also lose its no-op path.
+        let wedged = makeState(lock: LockPolicy(kind: .password, delay: 900, updatedAt: now))
+        #expect(Ratchet.assess(.setLockKind(.password), in: wedged).refusal == nil)
+    }
+
     @Test("A refused mutation never mutates state")
     func refusalIsInert() {
         let state = makeState()
@@ -1240,6 +1279,21 @@ struct RatchetReleaseTests {
         #expect(state.lock.kind == .delay)
     }
 
+    @Test("A released lock-kind change cannot land a passphrase-only Lock with no passphrase")
+    func releasingAPasswordOnlyKindWithoutADigestDemotesIt() {
+        // `lockKindRefusal` blocks this at queue time, but `.setLockKind` and
+        // `.clearLockPassword` have different `targetKey`s, so both can be open
+        // at once and `releaseRipe` applies them in deadline order. A passphrase
+        // removal that lands first turns a change that was legal when queued into
+        // the wedge. This is the backstop for that interleaving.
+        var state = makeState(lock: LockPolicy(kind: .delay, delay: 900, updatedAt: now))
+        Ratchet.applyReleased(.setLockKind(.password), in: &state, now: now)
+
+        #expect(state.lock.kind == .delay, "demoted rather than wedged")
+        #expect(state.lock.password == nil)
+        #expect(state.lock.earliestApplyDate(from: now) != nil, "the clock still releases")
+    }
+
     @Test("Releasing a lock-kind change that cannot use a passphrase drops the digest")
     func demotingTheKindDropsTheDigest() {
         var state = makeState(
@@ -1352,6 +1406,69 @@ struct RatchetLockClockMirrorTests {
 
         #expect(cancelled.state.lockClock == nil)
         #expect(cancelled.effects.mirrorsLockClock, "the Keychain must learn about the cancellation")
+    }
+
+    @Test("A deadline adopted from the Keychain survives an empty queue")
+    func adoptedDeadlineSurvivesAReinstall() throws {
+        // The reinstall shape: the App Group container is gone, so `GateState`
+        // has no pending changes at all, and the surviving Keychain deadline has
+        // just been adopted into `lockClock` by `AppModel.resolveLockClock`.
+        // Before `survivingMirror` this projection answered `nil`, `advance` wrote
+        // that back and asked for a Keychain write — tombstoning the deadline.
+        // Deleting the app cleared the Lock, in two steps, silently.
+        let adopted = LockClockRecord(
+            pendingChangeID: changeID,
+            earliestApplyAt: now.addingTimeInterval(3_600),
+            lockConfigHash: "abcdef0123456789",
+            installID: UUID(),          // a previous install
+            updatedAt: now.addingTimeInterval(-3_600)
+        )
+        var fresh = makeState(rules: [], pendingChanges: [])
+        fresh.lockClock = adopted
+
+        let mirror = try #require(Ratchet.lockClockMirror(for: fresh, now: now))
+        #expect(mirror == adopted, "verbatim, `updatedAt` included")
+        #expect(mirror.isFromPreviousInstall(currentInstallID: fresh.installID))
+    }
+
+    @Test("A surviving deadline is dropped once it ripens, and never resurrects a resolved one")
+    func survivingDeadlineIsNotImmortal() {
+        let base = LockClockRecord(
+            pendingChangeID: changeID,
+            earliestApplyAt: now.addingTimeInterval(3_600),
+            lockConfigHash: "abcdef0123456789",
+            installID: UUID(),
+            updatedAt: now
+        )
+
+        // Ripe: the wait has been served, so the Keychain must go idle.
+        var ripened = makeState(rules: [], pendingChanges: [])
+        ripened.lockClock = base
+        #expect(Ratchet.lockClockMirror(for: ripened, now: now.addingTimeInterval(3_601)) == nil)
+
+        // Not foreign: the change this record names is in *this* install's
+        // history, resolved. That is the ordinary "the wait is over" path, and
+        // keeping the record would make every satisfied deadline immortal.
+        var resolved = makeState(pendingChanges: [openChange().cancelled(at: now)])
+        resolved.lockClock = LockClockRecord(
+            pendingChangeID: changeID,
+            earliestApplyAt: now.addingTimeInterval(3_600),
+            lockConfigHash: "abcdef0123456789",
+            installID: resolved.installID,
+            updatedAt: now
+        )
+        #expect(Ratchet.lockClockMirror(for: resolved, now: now) == nil)
+
+        // A tombstone stays a tombstone.
+        var idle = makeState(rules: [], pendingChanges: [])
+        idle.lockClock = LockClockRecord(
+            pendingChangeID: nil,
+            earliestApplyAt: nil,
+            lockConfigHash: "abcdef0123456789",
+            installID: UUID(),
+            updatedAt: now
+        )
+        #expect(Ratchet.lockClockMirror(for: idle, now: now) == nil)
     }
 
     @Test("Re-running the same mutation does not gratuitously bump the mirror")

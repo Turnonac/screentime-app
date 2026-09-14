@@ -41,6 +41,12 @@ struct OnboardingScreen: View {
 
     @State private var step: Step = .deal
 
+    /// `Ratchet.lockPasswordRefusal` accepts a passphrase only while
+    /// `onboardingCompletedAt == nil`, with no digest and nothing queued — and
+    /// the tap below is the last moment in the app's life when all three hold.
+    /// Offering it anywhere later would be offering a button that always refuses.
+    @State private var isSettingPassphrase = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: GateTheme.Spacing.xl) {
@@ -89,6 +95,14 @@ struct OnboardingScreen: View {
         } message: { copy in
             Text(copy.message)
         }
+        // The same sheet `LockSettingsScreen` presents, from the one place most
+        // users can actually use it. `PartnerPassphraseSheet.commit()` already
+        // routes `Ratchet.Refusal` through `LockCostNote.refusalText`, so if the
+        // window has somehow closed the sheet says so rather than failing mutely.
+        .sheet(isPresented: $isSettingPassphrase) {
+            PartnerPassphraseSheet()
+                .environment(model)
+        }
     }
 
     // MARK: Header
@@ -134,6 +148,16 @@ struct OnboardingScreen: View {
                  + "stays on this device.")
                 .font(GateTheme.Typography.footnote)
                 .foregroundStyle(GateTheme.textTertiary)
+
+            // Guideline 5.1.1(i): the policy has to be reachable inside the app
+            // and without an account. `HomeScreen`'s overflow menu carries the
+            // same link for every launch after this one — a reviewer who is
+            // mid-onboarding never reaches that menu, which is why both exist
+            // (Docs/REVIEW-NOTES.md §5).
+            Link("Privacy policy", destination: GateLinks.privacyPolicy)
+                .font(GateTheme.Typography.footnote)
+                .tint(GateTheme.accent)
+                .frame(minHeight: GateTheme.Spacing.minimumTapTarget)
         }
     }
 
@@ -261,6 +285,43 @@ struct OnboardingScreen: View {
                 .tint(GateTheme.accent)
             }
             .gateCard()
+
+            // **Now or never, and the copy has to say so.** A passphrase is the
+            // only release path that is not a countdown, and
+            // `Ratchet.lockPasswordRefusal` refuses to set one once the Lock has
+            // been armed — because whoever can set a passphrase can release every
+            // loosening already queued behind the delay. That guard is the
+            // anti-bypass property, so the remedy is to surface the window, never
+            // to widen it.
+            if model.state.lock.password == nil {
+                VStack(alignment: .leading, spacing: GateTheme.Spacing.s) {
+                    Text("Optional: a partner passphrase")
+                        .font(GateTheme.Typography.headline)
+                        .foregroundStyle(GateTheme.textPrimary)
+
+                    Text("Someone else types a passphrase now and does not tell you. After "
+                         + "that, they can release a waiting change early — you never can.")
+                        .font(GateTheme.Typography.body)
+                        .foregroundStyle(GateTheme.textSecondary)
+
+                    Text("This screen is the only place it can be set. Once Gate starts "
+                         + "using the Lock, adding a passphrase would be a way to release "
+                         + "everything already waiting, so Gate stops accepting one.")
+                        .font(GateTheme.Typography.footnote)
+                        .foregroundStyle(GateTheme.pending)
+
+                    Button {
+                        isSettingPassphrase = true
+                    } label: {
+                        Label("Set a partner passphrase", systemImage: "person.2")
+                            .frame(minHeight: GateTheme.Spacing.minimumTapTarget)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(GateTheme.accent)
+                    .disabled(!model.isOperational)
+                }
+                .gateCard()
+            }
 
             Button {
                 model.completeOnboarding()

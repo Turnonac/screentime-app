@@ -798,3 +798,151 @@ struct GrantPolicyTests {
         #expect(TokenKind.webDomain.collection == .webDomains)
     }
 }
+
+// MARK: - The inbox bridge
+
+#if canImport(os)
+/// Fenced exactly as the source is: `InboxEvent` lives in a file that imports
+/// `os`, so `GrantEngine`'s inbox bridge and `Reconciler.fold` are both behind
+/// `#if canImport(os)`. Nothing here touches the filesystem — `fold` is pure and
+/// takes the events as a value, which is the whole reason it is testable at all
+/// while `Reconciler.reconcile` (fenced on `canImport(ManagedSettings)`) is not.
+@Suite("GrantEngine — the inbox bridge (docs/04-product-spec.md V2-1)")
+struct InboxBridgeTests {
+
+    private let utc = calendar("UTC")
+
+    private func submenuEvent(
+        id: UUID = UUID(),
+        rule: UUID? = ruleID,
+        duration: TimeInterval,
+        at createdAt: Date
+    ) -> InboxEvent {
+        InboxEvent(
+            id: id,
+            kind: .grantIssued,
+            createdAt: createdAt,
+            ruleID: rule,
+            payload: GrantEngine.inboxPayload(
+                action: .thirdSubmenuItem,
+                token: token(0xA1),
+                kind: .application,
+                duration: duration
+            )
+        )
+    }
+
+    @Test("A pending submenu grant folds into a real grant, and the ledger pays for it once")
+    func submenuGrantFolds() throws {
+        let now = try instant(2026, 5, 14, 9, 0, in: utc)
+        let state = makeState(now: now)
+        let event = submenuEvent(duration: 15 * 60, at: now)
+
+        let folded = Reconciler.fold([event], into: state, now: now, calendar: utc)
+        let grant = try #require(folded.issued.first)
+
+        // `grantID: request.id`: `GateShieldAction` already armed a one-shot
+        // expiry activity named for this id. Minting a fresh UUID here would
+        // orphan that timer.
+        #expect(grant.id == event.id)
+        #expect(grant.requestID == event.id)
+        #expect(grant.ruleID == ruleID)
+        #expect(grant.source == .shieldSubmenu, "the button named the duration")
+        #expect(grant.expiresAt == now.addingTimeInterval(15 * 60))
+        #expect(folded.state.grantLedger.used == 1)
+    }
+
+    @Test("Re-folding the same record is a no-op once the grant is in state")
+    func submenuGrantIsIdempotent() throws {
+        // This is what makes `ReconcileOptions.foldsPendingGrants` safe. The
+        // monitor folds the record read-only on every pass until the app drains
+        // it, so the *second* fold — against a state that already carries the
+        // grant — must not spend the budget again.
+        let now = try instant(2026, 5, 14, 9, 0, in: utc)
+        let event = submenuEvent(duration: 15 * 60, at: now)
+
+        let first = Reconciler.fold([event], into: makeState(now: now), now: now, calendar: utc)
+        let second = Reconciler.fold([event], into: first.state, now: now, calendar: utc)
+
+        #expect(second.issued.isEmpty)
+        #expect(second.duplicates == 1)
+        #expect(second.state.grantLedger.used == 1, "billed once, however many passes see it")
+        #expect(second.state.grants.count == 1)
+
+        // Two copies of the same record inside one fold are the redelivery case
+        // and collapse the same way.
+        let twice = Reconciler.fold([event, event], into: makeState(now: now), now: now, calendar: utc)
+        #expect(twice.issued.count == 1)
+        #expect(twice.duplicates == 1)
+    }
+
+    @Test("A pending grant older than InterventionRequest.maxAge is refused as stale")
+    func staleSubmenuGrantIsDenied() throws {
+        // KNOWN GAP, pinned here so it cannot change silently: `fold` issues
+        // through the default `maxAge` of 15 minutes, but the submenu's third
+        // item asks for an hour. A record the app does not reach inside 15
+        // minutes is denied — and the one-shot expiry activity armed for it
+        // still fires an hour later. Widening `maxAge` here is NOT the fix on its
+        // own: `GrantEngine.issue` dates the grant from `now` rather than from
+        // the tap, so a 45-minute-old hour-long request would expire 1h45m after
+        // the tap. See Docs/REVIEW-NOTES.md.
+        let now = try instant(2026, 5, 14, 9, 0, in: utc)
+        let tapped = now.addingTimeInterval(-(InterventionRequest.maxAge + 60))
+        let event = submenuEvent(duration: 60 * 60, at: tapped)
+
+        let folded = Reconciler.fold([event], into: makeState(now: now), now: now, calendar: utc)
+        #expect(folded.issued.isEmpty)
+        #expect(folded.denials[.stale] == 1)
+        #expect(folded.state.grantLedger.used == 0, "a refusal spends nothing")
+
+        // Inside the window the same record is honoured.
+        let fresh = submenuEvent(duration: 60 * 60, at: now.addingTimeInterval(-60))
+        let ok = Reconciler.fold([fresh], into: makeState(now: now), now: now, calendar: utc)
+        #expect(ok.issued.count == 1)
+    }
+
+    @Test("A grant request is reported, never issued — only the app's screen can issue one")
+    func grantRequestIsNotAGrant() throws {
+        // The reason `foldsPendingGrants` filters to `.grantIssued`: a
+        // `.grantRequest` is a shield tap the user has not paid for yet.
+        let now = try instant(2026, 5, 14, 9, 0, in: utc)
+        let request = InboxEvent(
+            kind: .grantRequest,
+            createdAt: now,
+            ruleID: ruleID,
+            payload: GrantEngine.inboxPayload(
+                action: .primaryButton, token: token(0xA1), kind: .application
+            )
+        )
+
+        let folded = Reconciler.fold([request], into: makeState(now: now), now: now, calendar: utc)
+        #expect(folded.issued.isEmpty)
+        #expect(folded.requests.count == 1)
+        #expect(folded.requests[0].resolution == nil, "open: the app must route it to V1-7")
+        #expect(folded.state.grantLedger.used == 0)
+    }
+
+    @Test("In-flight records close the double-spend window between a tap and a foreground")
+    func inFlightCounting() throws {
+        let now = try instant(2026, 5, 14, 9, 0, in: utc)
+        let events = [
+            submenuEvent(duration: 60, at: now),                                    // counted
+            InboxEvent(kind: .grantRequest, createdAt: now, ruleID: ruleID),        // counted
+            InboxEvent(kind: .bypassAttempt, createdAt: now, ruleID: ruleID),       // already over
+            InboxEvent(kind: .breadcrumb, createdAt: now),                          // not a tap
+            submenuEvent(duration: 60, at: now.addingTimeInterval(-3_600))          // nobody is coming back
+        ]
+
+        #expect(GrantEngine.inFlightCount(in: events, now: now) == 2)
+
+        // And the budget shrinks by exactly that, which is what stops a day's
+        // grants being spent twice from a `state.plist` the extension cannot
+        // update.
+        let ledger = GrantLedger(used: 0, periodStart: now)
+        let budget = GrantEngine.budget(
+            ledger: ledger, policy: .default, now: now, calendar: utc, inFlight: 2
+        )
+        #expect(budget.remaining == GateLimits.defaultDailyGrantBudget - 2)
+    }
+}
+#endif

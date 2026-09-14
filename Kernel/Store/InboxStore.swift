@@ -89,8 +89,15 @@ public struct InboxEvent: Codable, Hashable, Sendable, Identifiable {
         /// A grant was issued *by an extension* rather than by the app — the
         /// iOS 26.4+ shield submenu path ("1 more minute" / "15 more minutes" /
         /// "1 hour", docs/04-product-spec.md V2-1). The app applies it to
-        /// `GateState` and arms the one-shot expiry activity on the next
-        /// reconcile. v1 never writes this.
+        /// `GateState` on the next reconcile; the extension has already armed the
+        /// one-shot expiry activity, which is why the grant must adopt this
+        /// event's `id`.
+        ///
+        /// Written whenever the device actually has the submenu:
+        /// `GateShieldAction` handles the three submenu cases, and
+        /// `GateShieldConfiguration` offers them behind `if #available(iOS 26.4)`.
+        /// Below 26.4 nothing writes one, so the v1 install base mostly never
+        /// sees this kind — "mostly", not "never".
         case grantIssued = "granted"
 
         /// The user hit a shield. Counted honestly and shown back to them as
@@ -537,12 +544,42 @@ public struct InboxStore: Sendable {
         )
     }
 
-    /// Reads without deleting. For the debug screen only
-    /// (docs/04-product-spec.md V1-11).
-    public func peek(limit: Int = InboxStore.maxEventsPerDrain) throws -> [InboxEvent] {
-        try pendingFiles()
+    /// Reads without deleting.
+    ///
+    /// Two callers, both of which must see records the app has not drained yet
+    /// and neither of which may delete one:
+    ///
+    /// * `GateShieldAction`, to count in-flight grants against the day's budget
+    ///   (``GrantEngine/inFlightCount(in:now:maxAge:)``) — `state.plist`'s ledger
+    ///   is stale between a shield tap and the next foreground.
+    /// * `Reconciler`, under ``ReconcileOptions/foldsPendingGrants``, so the
+    ///   monitor can honour a submenu grant on the pass it wakes for.
+    ///
+    /// And the debug screen (docs/04-product-spec.md V1-11).
+    ///
+    /// - Parameter kind: when non-`nil`, only events of that kind are read at
+    ///   all. **Pass it whenever you are looking for something specific.**
+    ///   `limit` truncates in `contentsOfDirectory` order, which is undefined,
+    ///   and the monitor fills this directory with breadcrumbs — so an unfiltered
+    ///   `peek` can silently omit the one record the caller came for once the
+    ///   backlog exceeds `limit`. ``InboxEvent/fileName`` carries the kind, so
+    ///   filtering happens on the filename, before any file is opened.
+    public func peek(
+        kind: InboxEvent.Kind? = nil,
+        limit: Int = InboxStore.maxEventsPerDrain
+    ) throws -> [InboxEvent] {
+        var files = try pendingFiles()
+        if let kind {
+            let prefix = "\(kind.rawValue)-"
+            files = files.filter { $0.lastPathComponent.hasPrefix(prefix) }
+        }
+        return files
             .prefix(limit)
             .compactMap { try? PlistFile<InboxEvent>(url: $0, coordinated: false).read() }
+            // The filename is a hint, not the authority: the decoded `kind` is.
+            // A record written by a newer build degrades to `.unknown` on decode
+            // and must not be handed back as something it is not.
+            .filter { kind == nil || $0.kind == kind }
             .sorted {
                 $0.createdAt == $1.createdAt
                     ? $0.id.uuidString < $1.id.uuidString

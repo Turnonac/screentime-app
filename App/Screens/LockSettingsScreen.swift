@@ -115,9 +115,17 @@ struct LockSettingsScreen: View {
                 // from `Ratchet.assess`. This is the rule, stated once, without
                 // interpolating a figure that reads as nonsense when the draft
                 // happens to be an increase.
-                Text("Making the wait longer takes effect immediately. Making it shorter "
-                     + "costs the difference, not the whole delay — and cutting it in "
-                     + "stages costs exactly the same as cutting it in one go.")
+                //
+                // The first clause is conditional because the Ratchet makes it
+                // so: `.setLockDelay` has a `deferrableTightening` projection, so
+                // with the switch off an *increase* queues like everything else.
+                // Stating it flatly would contradict the Ratchet footer two
+                // sections down, on the same screen, in the same scroll.
+                Text((lock.isRatchetEnabled
+                      ? "Making the wait longer takes effect immediately. "
+                      : "With the Ratchet off, making the wait longer waits too. ")
+                     + "Making it shorter costs the difference, not the whole delay — and "
+                     + "cutting it in stages costs exactly the same as cutting it in one go.")
             }
         }
     }
@@ -140,10 +148,21 @@ struct LockSettingsScreen: View {
             Text("What releases a queued change")
         } footer: {
             // V1-3, verbatim: "Changing the lock *type* is a loosening and goes
-            // through the lock." No exceptions.
+            // through the lock." No exceptions to the *direction*.
+            //
+            // There is one exception to the change being available at all, and
+            // the sentence below has to carry it or the footer over-claims the
+            // way the Ratchet footer used to: `Ratchet.lockKindNeedsPassphrase`
+            // refuses "Partner passphrase only" while no digest is on file,
+            // because such a Lock accepts no passphrase and ripens on no clock —
+            // every future loosening trapped, permanently. That row renders
+            // disabled with its own `LockCostNote`; this says why in advance.
             Text("Changing this is always a loosening, whichever direction you go — "
                  + "even adding a passphrase to a delay, because that adds a second way out. "
-                 + "So it goes through the Lock you have now.")
+                 + "So it goes through the Lock you have now.\n\n"
+                 + "A passphrase-only Lock needs a passphrase already on file. Without one "
+                 + "it would accept nothing and count down to nothing, so Gate will not let "
+                 + "you pick that option.")
         }
     }
 
@@ -215,8 +234,7 @@ struct LockSettingsScreen: View {
             )) {
                 VStack(alignment: .leading, spacing: GateTheme.Spacing.xxs) {
                     Text("Permit tightening changes directly")
-                    Text("On: blocking more is instant. Off: everything waits, including "
-                         + "blocking more.")
+                    Text("On: blocking more is instant. Off: most tightenings wait too.")
                         .font(GateTheme.Typography.footnote)
                         .foregroundStyle(GateTheme.textSecondary)
                 }
@@ -228,8 +246,25 @@ struct LockSettingsScreen: View {
         } header: {
             Text("The Ratchet")
         } footer: {
-            Text("Turning this off makes Gate stricter, so it is free. Turning it back on "
-                 + "makes Gate easier to change, so it goes through the Lock.")
+            // Both sentences below are `Ratchet` behaviour, not a paraphrase:
+            //
+            // * The switch itself always queues. `.setRatchet(enabled: false)`
+            //   classifies as a loosening (V1-4's table), and turning it back on
+            //   is a tightening that `deferrableTightening` can express — so with
+            //   the switch already off, that queues too.
+            // * With the switch off, a tightening waits only when
+            //   `deferrableTightening` has a `PendingChange.Operation` for it;
+            //   cosmetic, cancellation and recovery-reselect stay exempt by spec
+            //   (V1-4, V1-9). The list below is that set, spelled out rather than
+            //   rounded up to "everything".
+            Text("Turning this off makes Gate stricter, and turning it back on makes Gate "
+                 + "easier to change. Both go through the Lock.\n\n"
+                 + "With it off, changing a rule's apps, schedule or mode, the delay, and "
+                 + "install protection all wait. Creating a rule, turning one back on, "
+                 + "ending an unblock early and renaming still apply right away — none of "
+                 + "those can loosen anything. Re-picking your apps after iOS re-issues "
+                 + "their handles applies right away too, and stays free by design, so a "
+                 + "lost handle can never trap you out of your own rules.")
         }
     }
 
@@ -391,7 +426,12 @@ private struct LockKindRow: View {
             .frame(minHeight: GateTheme.Spacing.minimumTapTarget)
         }
         .buttonStyle(.plain)
-        .disabled(isCurrent || !isEnabled)
+        // A refused kind is not tappable. `Ratchet.Refusal.lockKindNeedsPassphrase`
+        // makes `.password` unreachable while no digest is on file — the row still
+        // renders its `LockCostNote`, which routes the refusal through
+        // `LockCostNote.refusalText`, so the reason sits under the disabled row
+        // instead of arriving as a failure alert after a pointless tap.
+        .disabled(isCurrent || !isEnabled || assessment?.refusal != nil)
         .accessibilityAddTraits(isCurrent ? [.isSelected, .isButton] : .isButton)
     }
 
@@ -423,7 +463,13 @@ private struct LockKindRow: View {
 /// The copy is written for the person holding the phone *and* for the person
 /// typing, because the whole value of this feature is that they are different
 /// people.
-private struct PartnerPassphraseSheet: View {
+///
+/// Internal rather than private: `OnboardingScreen` presents the same sheet.
+/// `Ratchet.lockPasswordRefusal` only accepts a passphrase while
+/// `onboardingCompletedAt == nil`, so onboarding is the *only* moment most users
+/// can set one — offering it there and here from one implementation is what keeps
+/// the two flows from drifting apart.
+struct PartnerPassphraseSheet: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss

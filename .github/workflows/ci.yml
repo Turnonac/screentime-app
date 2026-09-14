@@ -275,19 +275,21 @@ jobs:
           fi
           echo "ok  working tree clean — nothing generated is tracked"
 
-      # Turn the one structurally-guaranteed failure into a legible one. The
-      # Gate app target's sources are `optional: true` in project.yml, so with
-      # App/ absent the target generates fine and then fails to link with an
-      # undefined `_main`, several hundred lines into the xcodebuild log.
+      # A safety net, not a milestone. The Gate app target's sources are
+      # `optional: true` in project.yml, so if App/ ever went missing the target
+      # would generate fine and then fail to link with an undefined `_main`,
+      # several hundred lines into the xcodebuild log. App/ is present today, so
+      # this step passes — a failure here now means somebody deleted it.
       - name: Preflight — app target has sources
         run: |
           set -euo pipefail
           if [ ! -f App/GateApp.swift ]; then
             echo "::error::App/GateApp.swift is missing — the Gate target has no sources."
             echo ""
-            echo "  This is expected until docs/06-build-plan.md Phase 2.1 lands."
+            echo "  Phase 2.1 has landed, so this is NOT expected: App/GateApp.swift"
+            echo "  is tracked in git. Check for a bad checkout or a deletion."
             echo "  Everything below this step (compiling the app, the two"
-            echo "  frameworks and the four extensions) cannot run until it does."
+            echo "  frameworks and the four extensions) cannot run without it."
             echo ""
             echo "  Present:"
             for d in Kernel KernelUI Extensions App Tests; do

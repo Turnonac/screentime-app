@@ -354,11 +354,14 @@ final class GateShieldConfiguration: ShieldConfigurationDataSource {
     /// initializer is the only place the 26.4 branch can live.
     private static func configuration(for copy: ShieldCopy) -> ShieldConfiguration {
         let icon = copy.iconAssetName.flatMap { name in
-            // `Bundle(for:)` is this `.appex`, which is where the asset catalog
-            // lives. A name that is not in the catalog yields `nil`, which the
-            // template reads as "use the system icon" — so a copy written by a
-            // newer build naming an asset this build does not ship degrades to a
-            // plain shield instead of a blank one.
+            // `Bundle(for:)` is this `.appex`, which is where an asset catalog
+            // would live if one shipped. **None does today** —
+            // `GateTheme.Shield.iconAssetName` is `nil` for exactly that reason,
+            // so this closure does not run at all and the shield uses the system
+            // icon. A name that is not in the catalog yields `nil` anyway, which
+            // the template reads as "use the system icon" — so a copy written by
+            // a newer build naming an asset this build does not ship degrades to
+            // a plain shield instead of a blank one.
             UIImage(named: name, in: Bundle(for: GateShieldConfiguration.self), compatibleWith: nil)
         }
 

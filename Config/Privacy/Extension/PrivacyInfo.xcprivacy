@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Gate privacy manifest. docs/06-build-plan.md step 7.1.
+
+	  Gate has no account, no server, no analytics SDK and no crash reporter, so
+	  the honest answer to every collection question is "none". Apple defines
+	  "collect" as transmitting off device; the DeviceActivityReport extension
+	  renders locally inside a sandbox that cannot pass data back to us, and the
+	  Screen Time selections are opaque tokens. Nothing leaves the device.
+
+	  NSPrivacyTrackingDomains is deliberately ABSENT. Its presence alongside
+	  NSPrivacyTracking=false is invalid and is itself a rejection
+	  (ITMS-91054/91055) — an empty array is not the safe default here.
+
+	  The two API categories below are the ones this binary actually reaches.
+	  Every target statically links GateKernel, which contains both call sites,
+	  so both are declared in both manifests rather than guessed per target:
+
+	    UserDefaults   1C8F.1  the App-Group reason, NOT CA92.1. The suite is
+	                           UserDefaults(suiteName: GateID.appGroup), read and
+	                           written by the app and by every extension that is
+	                           a member of the same App Group
+	                           (Kernel/Store/GateStateStore.swift — the state
+	                           generation beacon).
+	    FileTimestamp  C617.1  metadata of files inside the App Group container.
+	                           URL.resourceValues(forKeys: [.contentModificationDateKey])
+	                           in Kernel/Store/AppGroupContainer.swift and in
+	                           Extensions/ShieldConfiguration (the shield's
+	                           staleness stamp).
+
+	  Categories NOT declared, because the code does not hit them — checked, not
+	  assumed: SystemBootTime (no mach_absolute_time-family elapsed-time
+	  measurement; LockClock deliberately uses absolute dates, and the one
+	  mention of ProcessInfo.systemUptime is a comment explaining why it is NOT
+	  used), DiskSpace, and ActiveKeyboards. InboxStore orders events by a
+	  `createdAt` field decoded from the file's own contents, not by any
+	  filesystem timestamp, so it adds no requirement.
+
+	  Do not add a category speculatively. An incorrect declaration is
+	  rejectable in its own right.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

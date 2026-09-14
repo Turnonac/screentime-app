@@ -403,6 +403,11 @@ struct DebugScreen: View {
     /// cannot change `state.plist` — it only rewrites `ManagedSettingsStore`s and
     /// the activity list from the state already on disk, which is exactly what
     /// the extension does on `intervalDidStart`.
+    ///
+    /// The role also turns *on* `foldsPendingGrants`, so this pass reads (never
+    /// deletes) the pending `.grantIssued` records and honours a shield-submenu
+    /// grant the app has not drained yet — again, exactly as the extension does.
+    /// `inbox:` is left to default for that reason.
     private func runAsMonitor() {
         let started = Date()
         do {
