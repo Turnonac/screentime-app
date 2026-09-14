@@ -72,7 +72,31 @@ For each of the five: **Identifiers → + → App IDs → App → Explicit**, de
 | 4 | `com.turnonac.gate.shield-action` | ☐ ______ | ☐ | ______ | ______ | ☐ |
 | 5 | `com.turnonac.gate.report` | ☐ ______ | ☐ | ______ | ______ | ☐ |
 
-**Success state:** the capability reads **"Assigned"**, and the info button's *Provisioning Support* section lists every distribution method you need (App Store, TestFlight). "Submitted" is not success, and an approval email can arrive while the portal still says "Submitted" — if that happens, regenerate the provisioning profiles and check again before contacting support.
+### Reading the portal — two traps, both hit in practice
+
+**Trap 1: the capability info popover is generic.** Clicking ⓘ next to Family Controls shows *Platform Support / Provisioning Support / Entitlement Keys*. That is a static description of what the capability can do, shown identically to every developer the moment the box is ticked. `Provisioning Support: Development, Ad hoc, App Store Connect` is **not** a statement about your account. Do not read it as approval.
+
+**Trap 2: "Assigned" is ambiguous.** There are two capabilities, not one:
+
+| Capability | Who gets it | What it unlocks |
+|---|---|---|
+| **Family Controls** | anyone with a paid ADP membership, immediately on ticking the box | development signing to your own registered devices |
+| **Family Controls (Distribution)** | only after Apple grants this request | TestFlight and the App Store |
+
+The plain capability can read **"Assigned"** the moment you enable it, before you have filed anything. The distribution grant is a **separate entry** that appears on the App ID only once approved. If you see only one Family Controls row, you have development only.
+
+### The only test that settles it
+
+Portal status is indirect. The profile is ground truth:
+
+```sh
+# Profiles → + → App Store Connect (Distribution) → com.turnonac.gate → generate → download
+security cms -D -i Gate_AppStore.mobileprovision | grep -A2 family-controls
+```
+
+Entitlement present in an **App Store** profile → distribution is granted. Absent, or the profile refuses to generate → development only, and the five requests below still have to be filed.
+
+Do this check rather than trusting a status string: an approval email can arrive while the portal still reads "Submitted" (thread 820971), and an App ID can read "Assigned" while distribution profiles silently omit the entitlement (thread 807188). In both cases regenerate the profiles and re-run the command above before contacting support.
 
 ---
 
