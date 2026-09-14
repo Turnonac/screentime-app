@@ -1317,39 +1317,28 @@ public extension Reconciler {
                 // for this id, so the grant must adopt it — minting a fresh UUID
                 // here would orphan that timer and make MonitorPlan.diff stop it
                 // and start another (docs/05-architecture.md, activity budget).
-                let duration = GrantEngine.requestedDuration(in: event)
-
-                // `.grantIssued` does NOT get `InterventionRequest.maxAge`.
+                // NOTE: `maxAge` is deliberately left at the default 15-minute
+                // `InterventionRequest.maxAge`, even though the submenu's third
+                // item grants an hour. Widening it here alone makes things worse,
+                // not better: `GrantEngine.issue` dates the grant from `now`
+                // rather than from the tap, so a 45-minute-old hour-long request
+                // would expire 1h45m after the tap — longer than the shield
+                // promised and longer than the one-shot activity armed for it.
                 //
-                // That fifteen-minute window is a security property of the
-                // `.grantRequest` path, where the record is a *pointer* the app
-                // must not honour late — an hour-old deep link must not still
-                // convert into access. A `.grantIssued` record is the opposite:
-                // the iOS 26.4+ submenu already granted it at the shield and
-                // already armed the expiry timer, so folding it is bookkeeping
-                // over a decision that has been enforced since the tap. Judging
-                // it by the request window would deny "1 hour" as `.stale` after
-                // fifteen minutes while the timer it describes still fires
-                // forty-five minutes later — the ledger disagreeing with the
-                // device (docs/04-product-spec.md V2-1).
-                //
-                // The honest window is the life of the grant itself, floored at
-                // the request window so a duration-less record behaves as before.
-                // Past it the grant would have expired anyway, so `.stale` is
-                // then the correct answer. Dedup is unaffected: `isRedelivery`
-                // matches on `Grant/requestID`, retained for
-                // `Grant.terminalRetention` (7 days).
-                let issuedMaxAge = max(InterventionRequest.maxAge, duration ?? 0)
-
+                // The complete fix is to thread the tap time through `issue` as
+                // an explicit `issuedAt`, so a late fold both survives and
+                // expires on the tap's clock. That is a change to the grant
+                // ledger's semantics and is tracked in Docs/REVIEW-NOTES.md
+                // rather than made in passing.
+                // Pinned by GrantEngineTests.staleSubmenuGrantIsDenied.
                 let issuance = GrantEngine.issue(
                     for: request,
                     in: working,
                     now: now,
                     calendar: calendar,
                     isAuthorized: isAuthorized,
-                    duration: duration,
-                    grantID: request.id,
-                    maxAge: issuedMaxAge
+                    duration: GrantEngine.requestedDuration(in: event),
+                    grantID: request.id
                 )
                 working = issuance.state
                 if let grant = issuance.grant { issued.append(grant) }

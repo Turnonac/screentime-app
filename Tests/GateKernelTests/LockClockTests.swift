@@ -89,7 +89,7 @@ struct LockClockRecordMergeTests {
 
         #expect(merged == mirrored)
         #expect(merged?.pendingChangeID == changeID)
-        #expect(merged?.remaining(at: now) == 4 * 3600)
+        #expect(merged?.remaining(at: now) == (14_400 as TimeInterval))
         #expect(merged?.isRipe(at: now) == false)
         // An absent App Group copy is not evidence the deadline was satisfied —
         // it is evidence the container was deleted.
@@ -108,7 +108,7 @@ struct LockClockRecordMergeTests {
         // invalidation would make "reconfigure the Lock" the cleanest bypass in
         // the product.
         #expect(merged.hasConfigDrift(against: cheaperLock))
-        #expect(merged.remaining(at: now) == 4 * 3600)
+        #expect(merged.remaining(at: now) == (14_400 as TimeInterval))
         #expect(merged.earliestApplyAt == armedUnder.earliestApplyAt)
     }
 

@@ -229,7 +229,7 @@ struct GrantBudgetTests {
         #expect(withInbox.remaining == 0)
         #expect(withInbox.isExhausted)
 
-        #expect(plain.timeUntilReset(from: now) == 12 * 3600)
+        #expect(plain.timeUntilReset(from: now) == (43_200 as TimeInterval))
     }
 
     @Test("Budget never reports a negative remainder")

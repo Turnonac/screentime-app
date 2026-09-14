@@ -368,7 +368,7 @@ struct ScheduleSpecShapeTests {
         #expect(spec.intervalStart.hour == 22)
         #expect(spec.intervalEnd.hour == 6)
         // Nominal, and correct: it wraps past midnight.
-        #expect(spec.nominalDuration == 8 * 3600)
+        #expect(spec.nominalDuration == (28_800 as TimeInterval))
 
         // The warning lead is a DURATION and is deliberately a different
         // component set; the matching rule governs the two ends and nothing else.
@@ -701,11 +701,15 @@ struct ActivityNameCodecTests {
 
     @Test("Either UUID casing parses; encoding is canonical")
     func casingIsAcceptedOnTheWayIn() {
-        let lowercased = "gate.rule:\(ruleID.uuidString.lowercased())"
-        #expect(ActivityNameCodec.decode(lowercased) == .rule(ruleID: ruleID))
+        // A UUID with hex LETTERS in it. `ruleID` is all digits
+        // (11111111-1111-4111-8111-111111111111), so `.lowercased()` is a no-op
+        // on it and the `!=` below could never hold no matter what `encode` did.
+        let lettered = UUID(uuidString: "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE")!
+        let lowercased = "gate.rule:\(lettered.uuidString.lowercased())"
+        #expect(ActivityNameCodec.decode(lowercased) == .rule(ruleID: lettered))
         // Compare parsed values, never raw strings: the reverse round trip is
         // deliberately not guaranteed.
-        #expect(ActivityNameCodec.encode(.rule(ruleID: ruleID)) != lowercased)
+        #expect(ActivityNameCodec.encode(.rule(ruleID: lettered)) != lowercased)
     }
 
     @Test("Event names round-trip and reject anything Gate would not have written")
