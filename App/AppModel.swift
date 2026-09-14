@@ -204,8 +204,6 @@ final class AppModel {
     private var didLoadShieldMessages = false
 
     /// An observation token whose SDK type is deliberately not named. See
-    /// ``startObservingTokenExpiry()``.
-    private var tokenExpiryObservation: Any?
 
     // MARK: Init
 
@@ -557,7 +555,6 @@ final class AppModel {
         await clearInterventionNotifications()
 
         // 7. Start listening for token expiry, if the OS can tell us.
-        startObservingTokenExpiry()
     }
 
     // MARK: - Authorization (V1-1)
@@ -784,60 +781,29 @@ final class AppModel {
         apply(.markTokenExpiry(observedAt: now), now: now)
     }
 
-    /// Subscribes to `ManagedSettingsStore.TokenExpiryMessage` (V1-9, iOS 26.5+).
-    ///
-    /// **(unverified — this is the one SDK spelling in the app I could not check
-    /// against a real toolchain.)** Apple documents the type and says it is
-    /// "posted to NotificationCenter" (docs/02-api-reference.md §6) but publishes
-    /// neither a `Notification.Name` nor an example call site, and iOS 26 replaced
-    /// the string-named API with typed messages. If the overload below does not
-    /// match the shipping SDK, **this is the only line that changes** — and
-    /// nothing else in the recovery flow depends on it:
-    ///
-    ///   * `authorizationStatus` is polled on every foreground and routes to
-    ///     ``RecoveryTrigger/authorizationLost``;
-    ///   * `GateShieldAction` writes an `InboxEvent.tokenExpiry` whenever a token
-    ///     it is handed matches no rule, which the reconciler folds into
-    ///     `GateState.tokenExpiryObservedAt`;
-    ///   * the home screen always offers "a rule stopped working"
-    ///     (``RecoveryTrigger/userReported``).
-    ///
-    /// Those three are the paths that must work on iOS 17 anyway. This one is an
-    /// accelerator.
-    ///
-    /// The token is held as `Any?` so the file does not name the observation
-    /// type either, and it is deliberately never removed: it is app-lifetime, and
-    /// `removeObserver` would be a second unverified spelling for no benefit.
-    private func startObservingTokenExpiry() {
-        guard tokenExpiryObservation == nil else { return }
-        guard #available(iOS 26.5, *) else { return }
-
-        // The name-keyed API, not the typed-message overload.
-        // `addObserver(of:for:using:)` requires the message to conform to
-        // `NotificationCenter.MainActorMessage`, and `TokenExpiryMessage` does
-        // not — the compiler says so outright. Rather than guess which of the
-        // typed overloads it does fit, this uses the name every
-        // `NotificationCenter.Message` is required to publish, which is stable
-        // across both and posts as an ordinary Notification either way.
-        //
-        // This observation is an accelerator, not a floor: the three recovery
-        // routes documented above all work on iOS 17 without it.
-        tokenExpiryObservation = NotificationCenter.default.addObserver(
-            forName: ManagedSettingsStore.TokenExpiryMessage.name,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            // The hop is explicit rather than relying on the closure's isolation,
-            // which is part of the same unverified spelling. A `@MainActor` class
-            // is implicitly `Sendable`, so a weak capture of `self` is legal from
-            // any isolation.
-            Task { @MainActor in
-                guard let self else { return }
-                self.recovery = .tokenExpiryMessage
-                self.noteTokenExpiry(source: "TokenExpiryMessage")
-            }
-        }
-    }
+    // V1-9's 26.5 accelerator — `ManagedSettingsStore.TokenExpiryMessage` —
+    // is DELIBERATELY NOT OBSERVED here, after two attempts that a real SDK
+    // rejected:
+    //
+    //   1. `NotificationCenter.addObserver(of:for:using:)` — refused, because
+    //      the overload requires the message to conform to
+    //      `NotificationCenter.MainActorMessage` and this one does not.
+    //   2. `addObserver(forName: ...TokenExpiryMessage.name, ...)` — refused,
+    //      because that static property "is not concurrency-safe because it
+    //      involves shared mutable state" under Swift 6 strict concurrency.
+    //
+    // The remaining possibility is the AsyncMessage form of the typed API, and
+    // guessing a third spelling against an SDK nobody here can read is how the
+    // first two rounds were spent. Restore it on a machine with Xcode, where
+    // code completion settles the question in seconds.
+    //
+    // Nothing is lost meanwhile. This was always an accelerator, never a floor:
+    // all three recovery routes below work on the iOS 17 deployment target and
+    // do not depend on it —
+    //   * `ManagedSettingsStore.refresh(&tokens)` on the next reconcile;
+    //   * the shield action reporting a token that matches no rule, folded into
+    //     `GateState.tokenExpiryObservedAt`;
+    //   * the home screen's "a rule stopped working" (`RecoveryTrigger/userReported`).
 
     // MARK: - Interventions (V1-7)
 
