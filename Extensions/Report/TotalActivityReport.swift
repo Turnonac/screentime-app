@@ -62,6 +62,7 @@ import SwiftUI
 import os
 
 import GateKernel
+import GateKernelUI
 
 /// Computed, not stored: matches the convention in the other three extensions.
 private var reportLog: Logger {

@@ -772,7 +772,7 @@ public enum ShieldCopyFile {
 // exist on Linux. `print()` is never an option — it is invisible from an
 // extension (docs/06-build-plan.md step 4.1).
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 import ManagedSettings
 import os
 

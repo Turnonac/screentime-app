@@ -40,7 +40,7 @@
 //     (docs/06-build-plan.md step 3.11) where none of these frameworks exist.
 //  2. **No truncation, ever.** See above.
 //  3. The `ManagedSettings` half lives in the island at the bottom, fenced with
-//     `#if canImport(ManagedSettings)`, exactly as `Kernel/Enforcement/MonitorPlan.swift`
+//     `#if os(iOS)`, exactly as `Kernel/Enforcement/MonitorPlan.swift`
 //     fences `DeviceActivity`.
 //  4. **This file is the only token codec in the product.** ``EncodedToken``
 //     bytes are compared by ``GateFingerprint`` across process boundaries — the
@@ -54,7 +54,7 @@
 
 import Foundation
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 import ManagedSettings
 #endif
 
@@ -389,7 +389,7 @@ public enum TokenGuard {
 // so a stored property or a stored static of one inside a `Sendable` type is a
 // Swift 6 strict-concurrency error. Tokens are parameters and return values only.
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 
 public extension TokenGuard {
 

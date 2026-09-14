@@ -1389,7 +1389,7 @@ public extension Reconciler {
 
 // MARK: - Selection resolution
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 
 import ManagedSettings
 
@@ -1449,7 +1449,7 @@ public struct SelectionResolver: SelectionResolving {
 // edit honest: anything added here that needs a fourth framework has to say so,
 // in a fence, where the monitor's dyld closure is visible.
 
-#if canImport(ManagedSettings) && canImport(DeviceActivity) && canImport(os)
+#if os(iOS) && canImport(os)
 
 import DeviceActivity
 

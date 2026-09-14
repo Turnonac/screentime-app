@@ -39,7 +39,7 @@
 //     name that came back from the daemon lower-cased still parses but
 //     re-encodes upper-cased. Compare parsed values, never raw strings.
 //  3. **Foundation only in the pure layer.** The DeviceActivity types live in a
-//     `#if canImport(DeviceActivity)` island at the bottom, mirroring the
+//     `#if os(iOS)` island at the bottom, mirroring the
 //     `canImport(CryptoKit)` island in `Kernel/Model/LockPolicy.swift`, so the
 //     parsing logic compiles and is testable in the platform-agnostic SwiftPM
 //     package (docs/05-architecture.md, module layer split).
@@ -52,7 +52,7 @@
 
 import Foundation
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 import DeviceActivity
 #endif
 
@@ -428,7 +428,7 @@ public enum ActivityNameCodec {
 // `Kernel/Identifiers.swift`. These are all computed, and a `Name` is a `String`
 // wrapper, so constructing one per access costs nothing.
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 
 public extension GateActivity {
 

@@ -31,11 +31,11 @@ import Foundation
 // layer off-device, so every SDK symbol in this file sits behind a fence —
 // the same pattern Kernel/Engine/ScheduleBuilder.swift already uses. On iOS
 // every guard is true and the shipping build is unchanged.
-#if canImport(ManagedSettings)
+#if os(iOS)
 import ManagedSettings
 #endif
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 import DeviceActivity
 #endif
 
@@ -288,7 +288,7 @@ public enum GateID {
 
 // MARK: - ManagedSettingsStore.Name
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 public extension ManagedSettingsStore.Name {
 
     /// The store that enforces one rule.
@@ -367,7 +367,7 @@ public extension ManagedSettingsStore.Name {
 
 // MARK: - DeviceActivityName
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 public extension DeviceActivityName {
 
     /// Whether this activity name belongs to Gate.
@@ -392,37 +392,16 @@ public extension DeviceActivityName {
 #endif
 
 // MARK: - DeviceActivityReport.Context
-
-#if canImport(DeviceActivity)
-public extension DeviceActivityReport.Context {
-
-    /// The one report context v1 ships: a daily total-activity report rendered
-    /// by `Extensions/Report/TotalActivityReport.swift`
-    /// (docs/06-build-plan.md step 1.7; docs/04-product-spec.md V2-5).
-    ///
-    /// This string must match the `context` of the `DeviceActivityReportScene`
-    /// in the report extension exactly, or the report view renders blank with no
-    /// error. It is the *only* coupling between the app and that extension:
-    /// the report extension's sandbox is intentional and absolute, and nothing
-    /// it computes can ever reach the app by any channel — App Group
-    /// `UserDefaults`, App Group files, HTTP, notifications, pasteboard and
-    /// iCloud KVS are all confirmed blocked (docs/03-hard-constraints.md #30).
-    ///
-    /// Show at most **one** `DeviceActivityReport` per screen; three or more on
-    /// one screen is a reported crash threshold (docs/02-api-reference.md §11).
-    ///
-    /// `nonisolated` and computed rather than `static let`: `DeviceActivityReport`
-    /// is declared `@MainActor`, so a plain static on its nested type would be
-    /// main-actor-isolated and unusable from the report extension's
-    /// `makeConfiguration(representing:)`, which is a non-isolated `async`
-    /// requirement. Spelling it this way compiles under Swift 6 strict
-    /// concurrency regardless of how the SDK annotates `Context`, and the call
-    /// site is unchanged: `DeviceActivityReport(.totalActivity, filter: …)`.
-    nonisolated static var totalActivity: Self {
-        Self(GateID.namespace + "totalActivity")
-    }
-}
-#endif
+//
+// Deliberately NOT here. `DeviceActivityReport` is a SwiftUI view, so naming
+// its `Context` requires `import SwiftUI` — and GateKernel is linked by the
+// DeviceActivityMonitor extension, which runs under a 6 MB jetsam ceiling and
+// must never pull SwiftUI in (docs/03-hard-constraints.md #31,
+// docs/05-architecture.md "Module layer split").
+//
+// It lives in `KernelUI/ReportContext.swift` instead, which is linked by the
+// two targets that actually render a report — the app's Stats screen and the
+// GateReport extension — and by neither of the two that must stay lean.
 
 // MARK: - GateLimits
 

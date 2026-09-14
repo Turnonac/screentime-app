@@ -227,9 +227,10 @@ extension KeyedDecodingContainer {
         _ type: T.Type = T.self,
         forKey key: Key
     ) -> (values: [T], dropped: Int) {
-        guard let wrapped = try? decodeIfPresent([GateLossyElement<T>].self, forKey: key),
-              let elements = wrapped
-        else {
+        // One `guard let`, not two: `try?` flattens the optional that
+        // `decodeIfPresent` returns, so the result is a single-level
+        // `[GateLossyElement<T>]?` and a second binding has nothing to unwrap.
+        guard let elements = try? decodeIfPresent([GateLossyElement<T>].self, forKey: key) else {
             return ([], 0)
         }
         let values = elements.compactMap(\.value)

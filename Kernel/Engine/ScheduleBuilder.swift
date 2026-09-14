@@ -56,16 +56,16 @@
 //     process may have been killed while writing. Every calendar call that can
 //     return `nil` has a documented fallback.
 //  3. Foundation only in the pure layer; the SDK lives in the
-//     `#if canImport(DeviceActivity)` island at the bottom.
+//     `#if os(iOS)` island at the bottom.
 //
 
 import Foundation
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 import DeviceActivity
 #endif
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 import ManagedSettings
 #endif
 
@@ -895,7 +895,7 @@ public enum ScheduleBuilder {
 // of one inside a `Sendable` type is a Swift 6 strict-concurrency error. Same
 // reasoning as `ManagedSettingsStore.Name.solid` in `Kernel/Identifiers.swift`.
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 
 public extension ScheduleSpec {
 
@@ -916,7 +916,7 @@ public extension ScheduleSpec {
 
 #endif
 
-#if canImport(DeviceActivity) && canImport(ManagedSettings)
+#if os(iOS)
 
 public extension ScheduleBuilder {
 

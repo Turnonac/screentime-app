@@ -71,11 +71,11 @@
 
 import Foundation
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 import DeviceActivity
 #endif
 
-#if canImport(ManagedSettings)
+#if os(iOS)
 import ManagedSettings
 #endif
 
@@ -830,7 +830,7 @@ public extension MonitorPlan {
 // is a Swift 6 strict-concurrency error — the same reasoning that makes
 // `ManagedSettingsStore.Name.solid` computed in `Kernel/Identifiers.swift`.
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 
 public extension PlannedActivity {
 
@@ -843,7 +843,7 @@ public extension PlannedActivity {
 
 #endif
 
-#if canImport(DeviceActivity) && canImport(ManagedSettings)
+#if os(iOS)
 
 public extension PlannedActivity {
 
@@ -887,7 +887,7 @@ public extension PlannedActivity {
 
 #endif
 
-#if canImport(DeviceActivity)
+#if os(iOS)
 
 public extension MonitorPlan {
 
