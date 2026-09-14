@@ -17,26 +17,40 @@ run, or validated on a device.**
 This repository was authored on Linux, where no Xcode, no Swift compiler and no
 iOS SDK exist. The Swift here is written against the exact symbol list in
 `docs/02-api-reference.md` and is meant to be correct by construction — but
-"written carefully" is not "compiled", and nobody should read it as such.
+The tree compiles and its unit tests pass in CI. That is a real floor, and it
+is also the whole of what has been verified: no Screen Time behaviour has ever
+been observed, because none of it can run on a simulator or in a test process.
 
 | Phase (`docs/06-build-plan.md`) | State |
 |---|---|
-| 0 — App IDs + 5 entitlement requests | Not filed. Checklist ready in `Docs/ENTITLEMENT-REQUEST.md`. |
+| 0 — App IDs + 5 entitlement requests | Five App IDs created, Family Controls assigned on each. Checklist in `Docs/ENTITLEMENT-REQUEST.md`. |
 | 1 — XcodeGen scaffold, `Config/`, `Kernel/Identifiers.swift` | Written |
 | 2 — On-device proof loop + the go/no-go device gate | **Not run.** `Docs/DEVICE-TEST-MATRIX.md` is an unfilled template. |
 | 3 — `Kernel/` (model, store, ratchet, scheduling, enforcement, reconciler) | Written |
 | 4 — The four extensions | Written |
-| 5 — `App/` (SwiftUI screens, `AppModel`, reconcile-on-foreground) | Written — `GateApp`, `AppModel`, seven screens, `Debug/`. Never compiled. |
+| 5 — `App/` (SwiftUI screens, `AppModel`, reconcile-on-foreground) | Written and compiling — `GateApp`, `AppModel`, seven screens, `Debug/`. |
 | 6 — Personally useful dev-signed build | **Not reached.** Needs a Mac, Xcode 26.5+ and a physical device — none of which have touched this tree. |
-| 7 — App Store readiness (privacy manifests, CI, review notes) | CI, review notes and all five privacy manifests written; none validated by a real archive |
+| 7 — App Store readiness (privacy manifests, CI, review notes) | CI green. Review notes and all five privacy manifests written; none validated by a real archive |
 
 Concretely, that means:
 
-- **CI has never been observed running on this tree.** The preflight step that
-  guarded against an empty `Gate` target (`App/GateApp.swift` missing) now
-  passes, so the workflow proceeds to the compile job — but no run of that job
-  has been seen, and the first one may well fail. A green check has never
-  existed here.
+- **CI is green**, and that means exactly four things: the `Config/` strings
+  that make the four extensions launchable are correct; `project.yml` generates
+  and nothing generated is committed; the 234 `GateKernel` unit tests pass; and
+  all seven targets compile against the iOS 26.5 SDK with `GateReport.appex`
+  embedded in `Gate.app/Extensions/` rather than `PlugIns/`.
+
+  It does **not** mean a rule blocks an app, a shield renders, a monitor
+  callback arrives, a grant expires on time, or the Lock survives a reinstall
+  on real hardware. None of that is reachable from a simulator or a test
+  process (`docs/03-hard-constraints.md` #11). A release with a green check and
+  an unfilled `Docs/DEVICE-TEST-MATRIX.md` is not tested.
+
+- **One v1 feature is deliberately absent.** The iOS 26.5 accelerator that
+  observes `ManagedSettingsStore.TokenExpiryMessage` was removed after two
+  spellings were rejected by the SDK; `App/AppModel.swift` records both
+  failures and what to try next. V1-9's three other recovery routes are
+  unaffected and carry the feature on the iOS 17 floor.
 - **Two architectural decisions are still open**, and only a physical device can
   close them — no amount of further reading will. Both are in
   `Docs/DEVICE-TEST-MATRIX.md`: whether `ShieldActionResponse.openParentalControlsApp`
