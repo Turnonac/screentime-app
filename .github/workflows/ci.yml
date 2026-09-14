@@ -43,7 +43,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `claude/**` is here because this repository has no `main` yet: the work
+    # branch is the only content, and a compile check that never fires is worse
+    # than no compile check. Keep both once main exists.
+    branches: [main, "claude/**"]
   pull_request:
     branches: ["**"]
   workflow_dispatch:
