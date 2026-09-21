@@ -121,10 +121,27 @@ jobs:
           KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: |
           set -euo pipefail
-          mkdir -p ~/private_keys
-          printf '%s\n' "$KEY_P8" > ~/private_keys/AuthKey_${KEY_ID}.p8
-          chmod 600 ~/private_keys/AuthKey_${KEY_ID}.p8
-          echo "ok  key written (contents never logged)"
+          mkdir -p "$HOME/private_keys"
+          key="$HOME/private_keys/AuthKey_${KEY_ID}.p8"
+
+          # `tr -d '\r'` is load-bearing. The preflight signs straight from the
+          # environment variable and Python's PEM parser tolerates CRLF, so a
+          # key pasted through a Windows or iOS editor authenticates there and
+          # then fails inside Xcode with "Authentication failed: Make sure a
+          # bearer token was provided" — the one failure that looks like a bad
+          # key when the key is fine. Normalise the file the tool actually reads.
+          printf '%s\n' "$KEY_P8" | tr -d '\r' > "$key"
+          chmod 600 "$key"
+
+          # Validate what landed on disk, not what was in the variable.
+          if ! openssl pkey -in "$key" -noout 2>/dev/null; then
+            echo "::error::The .p8 written to disk is not a valid private key."
+            echo "  The secret parsed in the preflight but the file does not, so"
+            echo "  something in ASC_KEY_P8 survives as a variable and not as a file."
+            echo "  Re-paste the .p8 exactly as downloaded."
+            exit 1
+          fi
+          echo "ok  key written and parses as a private key ($(wc -l < "$key" | tr -d ' ') lines)"
 
       # TEAM_ID is the one build setting that cannot live in the repo. It goes
       # into the git-ignored Local.xcconfig that Build.xcconfig already includes.
@@ -161,7 +178,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Gate.xcarchive" \
             -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             COMPILER_INDEX_STORE_ENABLE=NO
@@ -195,7 +212,7 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist Config/ExportOptions.plist \
             -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID"
           ls -lh "$RUNNER_TEMP/export"
