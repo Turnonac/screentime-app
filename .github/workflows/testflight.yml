@@ -95,6 +95,23 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # Xcode's failure mode for a bad API key is a 401 from listTeams.action,
+      # which cascades into "No profiles for <bundle id> were found" on all five
+      # targets. That reads as a provisioning or entitlement problem when it is
+      # really a credentials problem — and the difference matters, because the
+      # Family Controls distribution entitlement is only actually exercised once
+      # authentication works. This asks Apple directly and names the bad secret.
+      - name: Preflight — validate the App Store Connect credentials
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check --break-system-packages pyjwt cryptography
+          python3 .github/scripts/asc_preflight.py
+
       # The API key has to exist as a file for xcodebuild, and in the keys
       # directory altool searches. Written outside the workspace so it can never
       # be picked up by a build phase or left in an artifact.
