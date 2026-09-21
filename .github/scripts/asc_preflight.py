@@ -68,6 +68,28 @@ elif "\\n" in p8:
 else:
     print(f"ok    ASC_KEY_P8     BEGIN line present, {len(p8.splitlines())} lines")
 
+
+def mask(v, head, tail):
+    """Show enough to compare against the portal, never the whole value.
+
+    Key ids and issuer ids are not secrets — the .p8 is — but GitHub masks any
+    exact secret value in logs, so printing them verbatim yields "***" and tells
+    nobody anything. A transformed value is not matched by that masking, so this
+    is the only way to surface which values are actually in use.
+    """
+    if len(v) <= head + tail:
+        return "?" * len(v)
+    return f"{v[:head]}{'.' * (len(v) - head - tail)}{v[-tail:]}"
+
+
+print()
+print("Compare these against App Store Connect — Users and Access ->")
+print("Integrations -> App Store Connect API:")
+print(f"  ASC_KEY_ID     {mask(key_id, 3, 2)}   (the KEY ID column, also in AuthKey_<id>.p8)")
+print(f"  ASC_ISSUER_ID  {mask(issuer, 8, 12)}   (the Issuer ID above the key list)")
+print(f"  APPLE_TEAM_ID  {mask(team, 3, 2)}   (developer.apple.com -> Membership details)")
+print()
+
 if problems:
     print()
     for p in problems:
