@@ -59,7 +59,16 @@ and need none.
 On the **Team Keys** tab: **+**
 
 - Name: `Gate CI`
-- Access: **App Manager**
+- Access: **Admin**
+
+> **Admin, not App Manager.** App Manager is enough to *upload* a build, but
+> not to manage Certificates, Identifiers & Profiles — and this pipeline has
+> to create a distribution certificate and five provisioning profiles on the
+> runner. With App Manager, the key authenticates, lists apps happily, and then
+> Xcode fails at the archive with "Authentication failed: Make sure a bearer
+> token was provided", which reads as a broken key rather than a restricted
+> one. The preflight tests the provisioning endpoint specifically so this is
+> named rather than guessed.
 
 Then collect three things:
 
@@ -120,6 +129,7 @@ answer is **No**.
 | Symptom | Cause |
 |---|---|
 | Preflight says "This is an INDIVIDUAL key" | You made the key on the wrong tab. Make one on **Team Keys** and replace all three key secrets. |
+| Preflight says it "cannot reach the provisioning endpoints" | The key's role is App Manager. Change it to **Admin**. |
 | Preflight 401 with all four secrets well-formed | The values do not match a live key, or it was created minutes ago and has not propagated — wait five minutes and re-run before changing anything. |
 | Archive fails, provisioning error naming `com.apple.developer.family-controls` | The distribution entitlement is not actually granted. Back to `Docs/ENTITLEMENT-REQUEST.md`. |
 | `No profiles for 'com.turnonac.gate.<x>' were found` | One of the five App IDs is missing or misspelled in the portal. Casing is load-bearing. |

@@ -104,15 +104,15 @@ except ImportError:
     print("::error::pyjwt is not installed on the runner.")
     sys.exit(1)
 
-def call(claims, label):
-    """Sign `claims` with the .p8 and GET /v1/apps. Returns (ok, apps, detail)."""
+def call(claims, label, path="/v1/apps?limit=200"):
+    """Sign `claims` with the .p8 and GET `path`. Returns (ok, data, detail)."""
     tok = jwt.encode(
         {**claims, "iat": int(time.time()), "exp": int(time.time()) + 300,
          "aud": "appstoreconnect-v1"},
         p8, algorithm="ES256", headers={"kid": key_id, "typ": "JWT"},
     )
     req = urllib.request.Request(
-        "https://api.appstoreconnect.apple.com/v1/apps?limit=200",
+        f"https://api.appstoreconnect.apple.com{path}",
         headers={"Authorization": f"Bearer {tok}"},
     )
     try:
@@ -189,7 +189,32 @@ print("ok    credentials authenticate against App Store Connect")
 bundles = [a.get("attributes", {}).get("bundleId") for a in apps]
 if WANT_BUNDLE_ID in bundles:
     print(f"ok    app record exists for {WANT_BUNDLE_ID}")
-    sys.exit(0)
+
+    # Reading apps and creating signing assets are different privileges, and
+    # only the second one matters here: `-allowProvisioningUpdates` has to mint
+    # a distribution certificate and five profiles on the runner. A key that
+    # can list apps but not touch Certificates, Identifiers & Profiles fails
+    # inside Xcode as "Authentication failed: Make sure a bearer token was
+    # provided", which reads as a broken key rather than an under-privileged
+    # one. Test the privilege that is actually needed.
+    ok_prov, _, prov_detail = call({"iss": issuer}, "team", "/v1/certificates?limit=1")
+    if ok_prov:
+        print("ok    key can reach Certificates, Identifiers & Profiles")
+        sys.exit(0)
+
+    print()
+    print("::error::The key authenticates but cannot reach the provisioning endpoints.")
+    print("  It can list apps, so the credentials themselves are right — it simply")
+    print("  lacks the access that `-allowProvisioningUpdates` needs to create the")
+    print("  distribution certificate and the five provisioning profiles.")
+    print()
+    print("  Fix: give the key the ADMIN role. App Manager is enough to upload a")
+    print("  build but not to manage Certificates, Identifiers & Profiles.")
+    print("  App Store Connect -> Users and Access -> Integrations ->")
+    print("  App Store Connect API -> Team Keys -> edit the key's access, or")
+    print("  create a new key with Admin and replace the three key secrets.")
+    print(f"  response: {prov_detail}")
+    sys.exit(1)
 
 print()
 print(f"::error::Credentials work, but no app record exists for {WANT_BUNDLE_ID}.")
