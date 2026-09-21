@@ -42,7 +42,21 @@ and need none.
 
 ### 2 · Create an App Store Connect API key
 
-**Users and Access → Integrations → App Store Connect API → Team Keys → +**
+**Users and Access → Integrations → App Store Connect API**
+
+> **It must be a TEAM key, on the "Team Keys" tab — not an Individual Key.**
+>
+> The two are not interchangeable and the difference is invisible until it
+> fails. They even sign their tokens differently: a team key's JWT carries an
+> `iss` claim holding the Issuer ID, while an individual key omits `iss` and
+> sets `sub` to `user`. More decisively, **individual keys cannot reach the
+> Provisioning endpoints** — and creating the five distribution profiles on the
+> runner is the entire reason this pipeline needs a key. An individual key
+> fails at the archive step.
+>
+> The preflight detects this and says so, rather than reporting a generic 401.
+
+On the **Team Keys** tab: **+**
 
 - Name: `Gate CI`
 - Access: **App Manager**
@@ -105,6 +119,8 @@ answer is **No**.
 
 | Symptom | Cause |
 |---|---|
+| Preflight says "This is an INDIVIDUAL key" | You made the key on the wrong tab. Make one on **Team Keys** and replace all three key secrets. |
+| Preflight 401 with all four secrets well-formed | The values do not match a live key, or it was created minutes ago and has not propagated — wait five minutes and re-run before changing anything. |
 | Archive fails, provisioning error naming `com.apple.developer.family-controls` | The distribution entitlement is not actually granted. Back to `Docs/ENTITLEMENT-REQUEST.md`. |
 | `No profiles for 'com.turnonac.gate.<x>' were found` | One of the five App IDs is missing or misspelled in the portal. Casing is load-bearing. |
 | Upload rejected, `ITMS-90022` / missing icon | `App/Assets.xcassets` did not make it into the target. |

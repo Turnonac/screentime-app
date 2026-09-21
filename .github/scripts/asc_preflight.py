@@ -82,46 +82,64 @@ except ImportError:
     print("::error::pyjwt is not installed on the runner.")
     sys.exit(1)
 
-token = jwt.encode(
-    {
-        "iss": issuer,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 300,
-        "aud": "appstoreconnect-v1",
-    },
-    p8,
-    algorithm="ES256",
-    headers={"kid": key_id, "typ": "JWT"},
-)
+def call(claims, label):
+    """Sign `claims` with the .p8 and GET /v1/apps. Returns (ok, apps, detail)."""
+    tok = jwt.encode(
+        {**claims, "iat": int(time.time()), "exp": int(time.time()) + 300,
+         "aud": "appstoreconnect-v1"},
+        p8, algorithm="ES256", headers={"kid": key_id, "typ": "JWT"},
+    )
+    req = urllib.request.Request(
+        "https://api.appstoreconnect.apple.com/v1/apps?limit=200",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return True, json.load(r).get("data", []), label
+    except urllib.error.HTTPError as e:
+        return False, None, f"HTTP {e.code}: {e.read().decode()[:300]}"
+    except Exception as e:  # noqa: BLE001
+        return False, None, f"{type(e).__name__}: {e}"
 
-req = urllib.request.Request(
-    "https://api.appstoreconnect.apple.com/v1/apps?limit=200",
-    headers={"Authorization": f"Bearer {token}"},
-)
 
-try:
-    with urllib.request.urlopen(req, timeout=30) as r:
-        apps = json.load(r).get("data", [])
-except urllib.error.HTTPError as e:
-    body = e.read().decode()[:400]
+# A Team Key signs with `iss` set to the issuer id. An INDIVIDUAL key omits
+# `iss` entirely and sets `sub` to "user" instead. Trying only one form makes a
+# key of the other type look like a wrong secret, so try both and say which fits.
+ok, apps, detail = call({"iss": issuer}, "team")
+
+if not ok:
+    ok_ind, _, _ = call({"sub": "user"}, "individual")
+    if ok_ind:
+        print()
+        print("::error::This is an INDIVIDUAL key. It has to be a TEAM key.")
+        print("  The credentials are valid — they authenticate when signed the")
+        print("  individual way (no iss claim, sub=user). But an individual key")
+        print("  cannot reach the Provisioning endpoints, and creating the five")
+        print("  distribution profiles on the runner is the entire reason this")
+        print("  pipeline needs an API key at all. It would fail at Archive.")
+        print()
+        print("  Fix: App Store Connect -> Users and Access -> Integrations ->")
+        print("  App Store Connect API -> the TEAM KEYS tab (not Individual Keys)")
+        print("  -> + -> role App Manager. Then replace ASC_KEY_ID, ASC_ISSUER_ID")
+        print("  and ASC_KEY_P8 with the new key's values.")
+        sys.exit(1)
+
     print()
-    if e.code == 401:
-        print("::error::Apple rejected the key (401). The secrets are well-formed but not valid together.")
-        print("  Most likely, in order:")
-        print("   1. ASC_KEY_ID and ASC_ISSUER_ID come from different keys, or are swapped.")
-        print("   2. The .p8 is not the file belonging to this ASC_KEY_ID.")
+    if detail.startswith("HTTP 401"):
+        print("::error::Apple rejected the key (401), signed either way.")
+        print("  The secrets are well-formed but do not match a live key:")
+        print("   1. ASC_KEY_ID is not the key id for this .p8 file.")
+        print("   2. ASC_ISSUER_ID is a different UUID than the one above the key list.")
         print("   3. The key has been revoked.")
-        print("  A .p8 downloads exactly once — if it is the wrong one, revoke the key and make another.")
-    elif e.code == 403:
+        print("   4. The key was created in the last few minutes and has not propagated.")
+        print("      If you just made it, wait five minutes and re-run before changing anything.")
+    elif detail.startswith("HTTP 403"):
         print("::error::Apple accepted the key but refused the request (403).")
-        print("  The key's role is too low. It needs App Manager:")
-        print("  Users and Access -> Integrations -> App Store Connect API.")
+        print("  The key's role is below App Manager. Users and Access ->")
+        print("  Integrations -> App Store Connect API -> edit the key's access.")
     else:
-        print(f"::error::App Store Connect returned HTTP {e.code}.")
-    print(f"  response: {body}")
-    sys.exit(1)
-except Exception as e:  # noqa: BLE001 — any failure here is fatal and worth naming
-    print(f"::error::Could not reach App Store Connect: {type(e).__name__}: {e}")
+        print("::error::Could not validate the credentials.")
+    print(f"  response: {detail}")
     sys.exit(1)
 
 print("ok    credentials authenticate against App Store Connect")
