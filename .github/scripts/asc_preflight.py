@@ -130,6 +130,26 @@ def call(claims, label):
 ok, apps, detail = call({"iss": issuer}, "team")
 
 if not ok:
+    # An Apple KEY ID and an Apple TEAM ID are both 10 uppercase alphanumerics,
+    # so nothing above can tell them apart and swapping the two secrets passes
+    # every shape check while failing authentication exactly like a wrong key.
+    # Probe it rather than leave the reader guessing.
+    saved_kid = key_id
+    key_id = team
+    ok_swap, _, _ = call({"iss": issuer}, "team-swapped")
+    key_id = saved_kid
+    if ok_swap:
+        print()
+        print("::error::ASC_KEY_ID and APPLE_TEAM_ID are swapped.")
+        print("  Authentication succeeds when APPLE_TEAM_ID's value is used as the")
+        print("  key id, so the two secrets hold each other's values. Both are 10")
+        print("  uppercase alphanumerics, which is why no shape check caught it.")
+        print()
+        print("  Fix: put the KEY ID (the key list's KEY ID column, and the id in")
+        print("  the AuthKey_<id>.p8 filename) in ASC_KEY_ID, and the Team ID")
+        print("  (developer.apple.com -> Membership details) in APPLE_TEAM_ID.")
+        sys.exit(1)
+
     ok_ind, _, _ = call({"sub": "user"}, "individual")
     if ok_ind:
         print()
